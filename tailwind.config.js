@@ -8,38 +8,78 @@ export default {
         sans: ['"Plus Jakarta Sans"', 'system-ui', 'sans-serif'],
       },
       colors: {
-  blush: {
-    50: '#FBE9EE',   // Very light pink (exact)
-    100: '#F9D9E1',
-    200: '#F7C9D6',  // Baby pink (exact)
-    300: '#F5BCCB',
-    400: '#F3B1C2',
-    500: '#F2A9BC',  // Blush pink — primary accent (exact)
-    600: '#D9789A',  // Muted rose pink — hover states (exact)
-    700: '#C15D80',  // Deeper accent pink — active elements (exact)
-    800: '#A1365B',
-    900: '#752441',
-  },
-  rose: {
-    50: '#FCF6F8', 100: '#F8E6EC', 200: '#F2CEDA', 300: '#EBB4C6',
-    400: '#E39BB4', 500: '#D9789A', 600: '#C15D80', 700: '#A1365B',
-    800: '#752441', 900: '#4E1830',
-  },
-  berry: {
-    300: '#D29EAC', 400: '#C36F85', 500: '#B44B67', 600: '#9A3D56',
-    700: '#8C3A50',  // Soft burgundy — anchor for dark text
-    800: '#6C273A', 900: '#481825',
-  },
-  cream: {
-    50: '#FFF9F5',   // Warm off-white (exact)
-    100: '#FDF3EC',  // Cream (exact)
-    200: '#EEE4DD', 300: '#E1CEC1', 400: '#D1B39F', 500: '#BD9275',
-    600: '#A57250', 700: '#7C553C', 800: '#5A3E2B', 900: '#37261B',
-  },
-  logo: '#F13184',   // NEW — reserved for logo, splash, key brand moments only
-  sage: { /* leave unchanged — used for "in stock" success states, not brand pink */ },
-  gold: { /* leave unchanged — used for star ratings, not brand pink */ },
-},
+        blush: {
+          50: '#fdf8f6',
+          100: '#fbeef0',
+          200: '#f7d9dd',
+          300: '#f0bcc4',
+          400: '#e89aa8',
+          500: '#dc7889',
+          600: '#c75a6f',
+          700: '#a84358',
+          800: '#8a3748',
+          900: '#6e2e3a',
+        },
+        rose: {
+          50: '#fdf5f6',
+          100: '#fbe9ec',
+          200: '#f7d0d7',
+          300: '#efabb8',
+          400: '#e47d91',
+          500: '#d35870',
+          600: '#b8425a',
+          700: '#9a354b',
+          800: '#7e2e3f',
+          900: '#652835',
+        },
+        berry: {
+          50: '#fbf4f5',
+          100: '#f6e6e8',
+          200: '#e8c5ca',
+          300: '#d39aa3',
+          400: '#b86d7a',
+          500: '#9a4a59',
+          600: '#7e3a48',
+          700: '#652e3b',
+          800: '#50252f',
+          900: '#3e1d26',
+        },
+        cream: {
+          50: '#fefdfb',
+          100: '#fdfaf4',
+          200: '#faf3e7',
+          300: '#f5e9d3',
+          400: '#eeddbb',
+          500: '#e3cca0',
+          600: '#d2b380',
+          700: '#bb9565',
+          800: '#a07e54',
+          900: '#876a47',
+        },
+        sage: {
+          50: '#f7f9f6',
+          100: '#eef3ec',
+          200: '#dde8da',
+          300: '#c2d2bd',
+          400: '#a0b89b',
+          500: '#809b7a',
+          600: '#637e5d',
+          700: '#4f644a',
+          800: '#3f503c',
+          900: '#334230',
+        },
+        gold: {
+          50: '#fdfaf3',
+          100: '#faf3e1',
+          200: '#f3e5bf',
+          300: '#ead08c',
+          400: '#ddb858',
+          500: '#cda03a',
+          600: '#b5832e',
+          700: '#926628',
+          800: '#765124',
+          900: '#5f4220',
+        },
       },
       borderRadius: {
         '4xl': '2rem',
