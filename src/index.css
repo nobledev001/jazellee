@@ -1,0 +1,136 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-cream-50 text-berry-800 font-sans antialiased;
+    font-feature-settings: 'kern', 'liga', 'clig', 'calt';
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-display;
+  }
+
+  ::selection {
+    @apply bg-blush-200 text-berry-800;
+  }
+}
+
+@layer components {
+  .container-jazelle {
+    @apply mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8;
+  }
+
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-full bg-blush-500 px-6 py-3 text-sm font-semibold text-white transition-all duration-300 hover:bg-blush-600 hover:shadow-soft-lg active:scale-[0.98];
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-full border border-blush-300 bg-white/60 px-6 py-3 text-sm font-semibold text-berry-700 transition-all duration-300 hover:border-blush-400 hover:bg-blush-50 active:scale-[0.98];
+  }
+
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-berry-600 transition-colors duration-200 hover:bg-blush-50 hover:text-berry-800;
+  }
+
+  .link-underline {
+    @apply relative inline-block transition-colors duration-200 hover:text-blush-600;
+  }
+
+  .link-underline::after {
+    content: '';
+    @apply absolute -bottom-0.5 left-0 h-px w-0 bg-blush-400 transition-all duration-300;
+  }
+
+  .link-underline:hover::after {
+    @apply w-full;
+  }
+
+  .input-jazelle {
+    @apply w-full rounded-full border border-blush-200 bg-white/70 px-5 py-3 text-sm text-berry-800 placeholder:text-blush-300 transition-all duration-200 focus:border-blush-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blush-200;
+  }
+
+  .card-jazelle {
+    @apply rounded-4xl bg-white shadow-soft transition-all duration-300;
+  }
+
+  .badge-jazelle {
+    @apply inline-flex items-center gap-1 rounded-full bg-blush-100 px-3 py-1 text-xs font-medium text-berry-600;
+  }
+
+  .section-title {
+    @apply font-display text-3xl font-medium text-berry-800 sm:text-4xl;
+  }
+
+  .section-subtitle {
+    @apply text-sm font-medium uppercase tracking-[0.18em] text-blush-400;
+  }
+}
+
+@keyframes splash-pattern {
+  0% { opacity: 0; transform: scale(1.08); filter: saturate(0.35); }
+  100% { opacity: 0.12; transform: scale(1); filter: saturate(0.65); }
+}
+
+@keyframes splash-badge {
+  0% { opacity: 0; transform: scale(0.35) rotate(-8deg); }
+  65% { opacity: 1; transform: scale(1.08) rotate(2deg); }
+  100% { opacity: 1; transform: scale(1) rotate(0); }
+}
+
+@keyframes splash-letter {
+  0% { opacity: 0; transform: translateY(18px); }
+  75% { opacity: 1; transform: translateY(-2px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes splash-subtitle {
+  0% { opacity: 0; transform: translateY(6px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+.animate-splash-pattern { animation: splash-pattern 1.5s ease-out forwards; }
+.animate-splash-badge { animation: splash-badge 1s cubic-bezier(0.22, 1, 0.36, 1) 1.5s forwards; }
+.animate-splash-letter { animation: splash-letter 0.7s cubic-bezier(0.22, 1, 0.36, 1) forwards; }
+.animate-splash-subtitle { animation: splash-subtitle 0.8s ease-out 4.15s forwards; }
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+
+  .bg-gradient-blush {
+   background: linear-gradient(135deg, #FBE9EE 0%, #F7C9D6 50%, #FDF3EC 100%);
+  }
+
+  .bg-gradient-cream {
+   background: linear-gradient(180deg, #FFF9F5 0%, #FDF3EC 100%);
+  }
+
+  .bg-gradient-rose-soft {
+    background: linear-gradient(135deg, #F9D9E1 0%, #F7C9D6 100%);
+  }
+
+  .text-gradient-blush {
+    background: linear-gradient(135deg, #D9789A 0%, #C15D80 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+}
