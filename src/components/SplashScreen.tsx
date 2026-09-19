@@ -49,7 +49,7 @@ export default function SplashScreen({ onComplete }: { onComplete: () => void })
           {WORD.split('').map((letter, index) => (
             <span
               key={`${letter}-${index}`}
-              className="font-display text-6xl font-semibold tracking-[0.18em] text-blush-600 opacity-0 animate-splash-letter sm:text-7xl"
+              className="font-display text-6xl font-semibold tracking-[0.18em] text-logo opacity-0 animate-splash-letter sm:text-7xl"
               style={{ animationDelay: `${2.15 + index * 0.24}s` }}
             >
               {letter}
