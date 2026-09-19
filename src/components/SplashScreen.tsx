@@ -3,16 +3,10 @@ import { useEffect, useState } from 'react';
 const WORD = 'JAZELLE';
 
 export default function SplashScreen({ onComplete }: { onComplete: () => void }) {
-  const [shouldShow, setShouldShow] = useState(() => sessionStorage.getItem('jazelle-splash-seen') !== 'true');
+  const [shouldShow, setShouldShow] = useState(true);
   const [leaving, setLeaving] = useState(false);
 
   useEffect(() => {
-    if (!shouldShow) {
-      onComplete();
-      return;
-    }
-
-    sessionStorage.setItem('jazelle-splash-seen', 'true');
     const leaveTimer = window.setTimeout(() => setLeaving(true), 6000);
     const completeTimer = window.setTimeout(() => {
       setShouldShow(false);
@@ -22,7 +16,7 @@ export default function SplashScreen({ onComplete }: { onComplete: () => void })
       window.clearTimeout(leaveTimer);
       window.clearTimeout(completeTimer);
     };
-  }, [onComplete, shouldShow]);
+  }, [onComplete]);
 
   if (!shouldShow) return null;
 
