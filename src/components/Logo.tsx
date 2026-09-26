@@ -1,3 +1,5 @@
+import jazelleWordmark from '@/assets/images/jazelle_wordmark_transparent.png';
+
 interface LogoProps {
   className?: string;
   compact?: boolean;
@@ -22,13 +24,10 @@ export default function Logo({ className = '', compact = false, size }: LogoProp
 
   return (
     <img
-      src="/assets/images/jazelle_wordmark_transparent.png"
+      src={jazelleWordmark}
       alt="Jazelle Skin Haven"
       referrerPolicy="no-referrer"
       className={`inline-block shrink-0 object-contain select-none transition-all ${sizeClass} ${className}`}
-      onError={(e) => {
-        (e.target as HTMLImageElement).src = '/assets/images/jazelle_wordmark_transparent.svg';
-      }}
     />
   );
 }

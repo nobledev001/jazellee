@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Lock, Mail, Eye, EyeOff } from 'lucide-react';
 import { useAdminAuth } from '../AdminAuth';
+import jazelleWordmark from '@/assets/images/jazelle_wordmark_transparent.png';
 
 export default function AdminLogin() {
   const { signIn } = useAdminAuth();
@@ -41,7 +42,7 @@ export default function AdminLogin() {
         {/* Header / Brand */}
         <div className="flex flex-col items-center justify-center mb-6 text-center">
           <img
-            src="/assets/images/jazelle_wordmark_transparent.png"
+            src={jazelleWordmark}
             alt="Jazelle Skin Haven"
             className="h-10 w-auto object-contain brightness-0 invert opacity-95"
           />

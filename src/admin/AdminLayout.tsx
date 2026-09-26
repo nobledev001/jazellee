@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { useAdminAuth } from './AdminAuth';
 import type { AdminRoute } from './AdminApp';
+import jazelleWordmark from '@/assets/images/jazelle_wordmark_transparent.png';
 
 const NAV_ITEMS: Array<{ route: AdminRoute; label: string; icon: typeof LayoutDashboard }> = [
   { route: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -69,7 +70,7 @@ export default function AdminLayout({
           </button>
           <div className="flex items-center gap-2.5 min-w-0">
             <img
-              src="/assets/images/jazelle_wordmark_transparent.png"
+              src={jazelleWordmark}
               alt="Jazelle Skin Haven"
               className="h-6 w-auto object-contain brightness-0 invert opacity-95 shrink-0"
             />
@@ -109,7 +110,7 @@ export default function AdminLayout({
         <div className="px-5 py-5 border-b border-gray-800 flex items-center justify-between gap-2">
           <div className="flex flex-col gap-1.5 min-w-0 flex-1">
             <img
-              src="/assets/images/jazelle_wordmark_transparent.png"
+              src={jazelleWordmark}
               alt="Jazelle Skin Haven"
               className="h-8 w-auto object-contain object-left brightness-0 invert opacity-95"
             />

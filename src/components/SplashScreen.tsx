@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import jazelleWordmark from '@/assets/images/jazelle_wordmark_transparent.png';
 
 export default function SplashScreen({ onComplete }: { onComplete: () => void }) {
   const [shouldShow, setShouldShow] = useState(true);
@@ -31,7 +32,7 @@ export default function SplashScreen({ onComplete }: { onComplete: () => void })
       />
       <div className="relative flex flex-col items-center px-6 max-w-lg w-full">
         <img
-          src="/assets/images/jazelle_wordmark_transparent.png"
+          src={jazelleWordmark}
           alt="Jazelle Skin Haven"
           className="w-full max-w-[320px] sm:max-w-[400px] h-auto object-contain opacity-0 animate-splash-badge drop-shadow-sm select-none"
         />
