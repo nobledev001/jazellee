@@ -432,6 +432,10 @@ INSERT INTO auth.users (
   email,
   encrypted_password,
   email_confirmed_at,
+  confirmation_token,
+  recovery_token,
+  email_change_token_new,
+  email_change,
   created_at,
   updated_at,
   raw_app_meta_data,
@@ -445,6 +449,10 @@ SELECT
   'admin@jazelle.com',
   crypt('admin123', gen_salt('bf')),
   now(),
+  '',
+  '',
+  '',
+  '',
   now(),
   now(),
   '{"role": "admin"}'::jsonb,
@@ -452,6 +460,15 @@ SELECT
 WHERE NOT EXISTS (
   SELECT 1 FROM auth.users WHERE email = 'admin@jazelle.com'
 );
+
+-- Ensure any existing SQL-seeded auth.users rows do not have NULL string tokens (fixes GoTrue "Database error querying schema")
+UPDATE auth.users
+SET
+  confirmation_token = COALESCE(confirmation_token, ''),
+  recovery_token = COALESCE(recovery_token, ''),
+  email_change_token_new = COALESCE(email_change_token_new, ''),
+  email_change = COALESCE(email_change, '')
+WHERE email = 'admin@jazelle.com';
 
 -- The handle_new_user trigger will create the profile row.
 -- Update it to set role = 'admin'.

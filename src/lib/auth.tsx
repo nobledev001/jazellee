@@ -261,6 +261,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           needsOtp: true,
         };
       }
+      if (
+        lowerMsg.includes('database error querying schema') ||
+        lowerMsg.includes('invalid login credentials') ||
+        lowerMsg.includes('invalid credentials') ||
+        lowerMsg.includes('user not found')
+      ) {
+        return { error: 'Invalid email or password.', needsOtp: false };
+      }
       return { error: error.message, needsOtp: false };
     }
 
