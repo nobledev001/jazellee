@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Lock, Mail, Eye, EyeOff, ShieldCheck } from 'lucide-react';
+import { Lock, Mail, Eye, EyeOff } from 'lucide-react';
 import { useAdminAuth } from '../AdminAuth';
 
 export default function AdminLogin() {
@@ -43,12 +43,8 @@ export default function AdminLogin() {
           <img
             src="/assets/images/jazelle_wordmark_transparent.png"
             alt="Jazelle Skin Haven"
-            className="h-10 w-auto object-contain brightness-0 invert opacity-95 mb-2"
+            className="h-10 w-auto object-contain brightness-0 invert opacity-95"
           />
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-pink-950/60 border border-pink-500/30 text-pink-300 text-xs font-medium tracking-wide">
-            <ShieldCheck className="w-3.5 h-3.5 text-pink-400" />
-            <span>Store Admin Portal</span>
-          </div>
         </div>
 
         {/* Card */}

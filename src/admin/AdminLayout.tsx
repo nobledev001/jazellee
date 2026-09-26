@@ -79,10 +79,6 @@ export default function AdminLayout({
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          <div className="hidden sm:flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-950/80 border border-emerald-500/40 text-[10px] text-emerald-300 font-mono">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
-            <span>LIVE</span>
-          </div>
           <a
             href="/"
             target="_blank"
@@ -119,10 +115,6 @@ export default function AdminLayout({
             />
             <div className="flex items-center justify-between gap-2">
               <div className="text-pink-400 font-medium text-[10px] tracking-widest uppercase">Owner Portal</div>
-              <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-950/80 border border-emerald-500/40 text-[10px] text-emerald-300 font-mono">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
-                <span>LIVE</span>
-              </div>
             </div>
           </div>
           <button
