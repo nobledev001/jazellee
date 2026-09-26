@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, Upload, Trash2, Check, AlertCircle, Sparkles, Loader2, Image as ImageIcon } from 'lucide-react';
+import { X, Upload, Trash2, Check, AlertCircle, Loader2, Image as ImageIcon } from 'lucide-react';
 import { supabase, type DbProduct, uploadProductImage } from '../supabase';
 
 interface ProductModalProps {
@@ -567,7 +567,6 @@ export default function ProductModal({ isOpen, onClose, onSaved, product }: Prod
                   </>
                 ) : (
                   <>
-                    <Sparkles className="h-4 w-4" />
                     <span>{isEditing ? 'Save Changes' : 'Create Product'}</span>
                   </>
                 )}

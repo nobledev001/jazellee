@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ArrowRight, Sparkles, Star } from 'lucide-react';
+import { ArrowRight, Star } from 'lucide-react';
 import { useSiteSettings } from '@/hooks/useSiteSettings';
 
 interface HeroSlide {
@@ -46,7 +46,7 @@ export default function Hero() {
   const [currentSlide, setCurrentSlide] = useState(0);
   const { getSetting } = useSiteSettings();
 
-  const heroBadge = getSetting('hero_badge', 'Now delivering across Nigeria');
+  const heroBadge = getSetting('hero_badge', 'Now delivering across Nigeria').replace(/[✨⭐🌟💫]/gu, '').trim();
   const heroHeadline = getSetting('hero_headline', 'Your little self-care haven');
   const heroSubtitle = getSetting(
     'hero_subtitle',
@@ -128,7 +128,6 @@ export default function Hero() {
           {/* Badge */}
           <div className="inline-flex items-center gap-2 mb-4 sm:mb-6 animate-fade-in">
             <span className="inline-flex items-center gap-2 rounded-full bg-white/15 backdrop-blur-md border border-white/25 px-3.5 py-1.5 text-xs sm:text-sm font-medium text-white shadow-soft">
-              <Sparkles className="w-3.5 h-3.5 text-blush-300 animate-pulse" />
               {heroBadge}
             </span>
           </div>

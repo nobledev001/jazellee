@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, Upload, Trash2, Check, AlertCircle, Sparkles, Loader2, Image as ImageIcon } from 'lucide-react';
+import { X, Upload, Trash2, Check, AlertCircle, Loader2, Image as ImageIcon } from 'lucide-react';
 import { supabase, type DbJournalArticle, uploadProductImage } from '../supabase';
 
 interface ArticleModalProps {
@@ -441,7 +441,6 @@ export default function ArticleModal({ isOpen, onClose, onSaved, article }: Arti
                   </>
                 ) : (
                   <>
-                    <Sparkles className="h-4 w-4" />
                     <span>{isEditing ? 'Save Changes' : 'Publish Story'}</span>
                   </>
                 )}

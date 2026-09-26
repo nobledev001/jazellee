@@ -1,4 +1,4 @@
-import { Heart, Sparkles, ArrowRight } from 'lucide-react';
+import { Heart, ArrowRight } from 'lucide-react';
 import { useSiteSettings } from '@/hooks/useSiteSettings';
 
 const WHY_SHOP = [
@@ -55,7 +55,6 @@ export default function AboutPage() {
           <div className="grid items-center gap-8 lg:grid-cols-2 lg:gap-16">
             <div>
               <div className="inline-flex items-center gap-2 mb-3">
-                <Sparkles className="w-4 h-4 text-blush-400" />
                 <span className="section-subtitle">{heroSubtitle}</span>
               </div>
               <h1 className="font-display text-4xl font-medium text-berry-800 sm:text-5xl leading-tight text-balance">

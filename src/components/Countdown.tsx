@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { useCountdown } from '@/hooks/useCountdown';
-import { PartyPopper, Sparkles } from 'lucide-react';
+import { PartyPopper } from 'lucide-react';
 import { useSiteSettings } from '@/hooks/useSiteSettings';
 
 function TimeUnit({ value, label }: { value: number; label: string }) {
@@ -66,7 +66,6 @@ export default function Countdown() {
               {liveSubtext}
             </p>
             <a href="/shop" className="btn-primary">
-              <Sparkles className="w-4 h-4" />
               Start Shopping
             </a>
           </div>
@@ -81,7 +80,6 @@ export default function Countdown() {
         <div className="absolute top-0 right-0 w-40 h-40 rounded-full bg-blush-100/50 blur-3xl pointer-events-none" />
         <div className="relative text-center">
           <div className="inline-flex items-center gap-2 mb-3">
-            <Sparkles className="w-4 h-4 text-blush-400" />
             <span className="section-subtitle">Special Event</span>
           </div>
           <h2 className="font-display text-2xl sm:text-3xl font-medium text-berry-800 mb-2 text-balance">

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Search, Plus, Sparkles, Edit3, Trash2, CheckCircle2 } from 'lucide-react';
+import { Search, Plus, Edit3, Trash2, CheckCircle2 } from 'lucide-react';
 import { supabase, type DbProduct } from '../supabase';
 import ProductModal from '../components/ProductModal';
 
@@ -151,7 +151,7 @@ export default function AdminProducts() {
                         {product.size && <span>• {product.size}</span>}
                         {product.label && (
                           <span className="inline-flex items-center gap-1 rounded-full bg-pink-50 px-2 py-0.5 text-[11px] font-medium text-pink-700">
-                            <Sparkles className="h-3 w-3" /> {product.label}
+                            {product.label}
                           </span>
                         )}
                       </div>
@@ -236,7 +236,7 @@ export default function AdminProducts() {
                       <td className="px-6 py-4 whitespace-nowrap">
                         {product.label ? (
                           <span className="inline-flex items-center gap-1 rounded-full bg-pink-50 px-2.5 py-0.5 text-xs font-medium text-pink-700">
-                            <Sparkles className="h-3 w-3" /> {product.label}
+                            {product.label}
                           </span>
                         ) : (
                           <span className="text-xs text-gray-300">—</span>

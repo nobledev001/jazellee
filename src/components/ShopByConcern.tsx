@@ -1,7 +1,6 @@
 import {
   ArrowUpRight,
-  Heart,
-  Sparkles,
+  ShoppingBag,
   Droplet,
   Layers,
   CircleDot,
@@ -20,7 +19,7 @@ interface Concern {
 const CONCERNS: Concern[] = [
   {
     question: 'Dark spots?',
-    icon: Sparkles,
+    icon: Sun,
     href: '/shop?concern=dark-spots',
     gradient: 'from-blush-100 to-blush-200',
   },
@@ -108,7 +107,7 @@ export default function ShopByConcern() {
           >
             <div className="flex items-start justify-between">
               <div className="w-12 h-12 sm:w-13 sm:h-13 rounded-full bg-white/20 backdrop-blur-xs border border-white/30 shadow-soft flex items-center justify-center text-cream-100 group-hover:bg-white/30 group-hover:text-white group-hover:scale-105 transition-all duration-300">
-                <Heart className="w-6 h-6 stroke-[1.5]" />
+                <ShoppingBag className="w-6 h-6 stroke-[1.5]" />
               </div>
               <div className="w-8 h-8 rounded-full bg-white/20 backdrop-blur-xs flex items-center justify-center text-cream-100 opacity-0 group-hover:opacity-100 group-hover:bg-white/30 transition-all duration-200">
                 <ArrowUpRight className="w-4 h-4" />

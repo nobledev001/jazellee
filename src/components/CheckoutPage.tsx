@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { ArrowRight, CreditCard, Building2, Smartphone, Check, Lock, ChevronDown, AlertCircle, Sparkles, Ticket, X, CheckCircle2 } from 'lucide-react';
+import { ArrowRight, CreditCard, Building2, Smartphone, Check, Lock, ChevronDown, AlertCircle, Ticket, X, CheckCircle2 } from 'lucide-react';
 import { useStore, getCartProducts } from '@/store/StoreContext';
 import { formatNaira } from '@/lib/format';
 import { useRouter } from '@/router';
@@ -576,7 +576,6 @@ export default function CheckoutPage() {
       {resumedOrderNumber && (
         <div className="mt-4 flex items-center justify-between gap-3 rounded-2xl bg-pink-50 p-4 text-xs text-pink-900 border border-pink-200 shadow-xs animate-fade-in-down">
           <div className="flex items-center gap-2.5">
-            <Sparkles className="h-4 w-4 text-pink-600 flex-shrink-0" />
             <span>
               Welcome back! We restored your reserved items from pending Order <strong>#{resumedOrderNumber}</strong>. You can review your details and complete payment below.
             </span>
@@ -895,7 +894,7 @@ export default function CheckoutPage() {
 
             <div className="mt-4 space-y-2 text-center text-xs text-berry-400">
               <p className="flex items-center justify-center gap-1">
-                <Sparkles className="h-3 w-3 text-blush-400" /> Stock automatically reserved on payment
+                Stock automatically reserved on payment
               </p>
               <p>By placing this order, you agree to our terms and privacy policy.</p>
             </div>

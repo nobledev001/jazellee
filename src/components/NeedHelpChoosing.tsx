@@ -1,4 +1,4 @@
-import { MessageCircle, Heart } from 'lucide-react';
+import { MessageCircle } from 'lucide-react';
 import { getWhatsAppLink } from '@/lib/whatsapp';
 import { useSiteSettings } from '@/hooks/useSiteSettings';
 
@@ -19,10 +19,6 @@ export default function NeedHelpChoosing() {
         <div className="absolute bottom-4 right-6 w-20 h-20 rounded-full bg-blush-300/30 blur-2xl pointer-events-none" />
 
         <div className="relative max-w-xl mx-auto">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-white shadow-soft mb-5">
-            <Heart className="w-6 h-6 text-blush-500 fill-blush-500" />
-          </div>
-
           <h2 className="font-display text-3xl sm:text-4xl font-medium text-berry-800 mb-3 text-balance">
             {headline}
           </h2>

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, Trash2, AlertCircle, Sparkles, Loader2 } from 'lucide-react';
+import { X, Trash2, AlertCircle, Loader2 } from 'lucide-react';
 import { supabase, type DbFaqSection } from '../supabase';
 
 interface FaqSectionModalProps {
@@ -204,7 +204,6 @@ export default function FaqSectionModal({ isOpen, onClose, onSaved, section }: F
                   </>
                 ) : (
                   <>
-                    <Sparkles className="h-4 w-4" />
                     <span>{isEditing ? 'Save Changes' : 'Create Section'}</span>
                   </>
                 )}

@@ -7,7 +7,6 @@ import {
   Edit3,
   Trash2,
   CheckCircle2,
-  Sparkles,
   Loader2,
   Clock,
   Eye,
@@ -329,7 +328,6 @@ export default function AdminContent() {
                   : 'text-gray-600 hover:text-gray-900'
               }`}
             >
-              <Sparkles className="h-3.5 w-3.5 text-pink-500" />
               <span>Hero Showcase</span>
             </button>
 
@@ -891,7 +889,7 @@ export default function AdminContent() {
                       required
                       value={settings.announcement_bar || ''}
                       onChange={(e) => handleSettingChange('announcement_bar', e.target.value)}
-                      placeholder="Free delivery on orders over ₦40,000 — across Nigeria ✨"
+                      placeholder="Free delivery on orders over ₦40,000 — across Nigeria"
                       className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:border-pink-500"
                     />
                     <p className="text-[11px] text-gray-400 mt-1">

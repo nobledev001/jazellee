@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, Trash2, AlertCircle, Sparkles, Loader2 } from 'lucide-react';
+import { X, Trash2, AlertCircle, Loader2 } from 'lucide-react';
 import { supabase, type DbFaqItem, type DbFaqSection } from '../supabase';
 
 interface FaqItemModalProps {
@@ -234,7 +234,6 @@ export default function FaqItemModal({
                   </>
                 ) : (
                   <>
-                    <Sparkles className="h-4 w-4" />
                     <span>{isEditing ? 'Save Changes' : 'Add Question'}</span>
                   </>
                 )}

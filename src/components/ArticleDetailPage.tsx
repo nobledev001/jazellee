@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Clock, ArrowLeft, ArrowRight, Share2, Check, Sparkles, BookOpen, ShoppingBag } from 'lucide-react';
+import { Clock, ArrowLeft, ArrowRight, Share2, Check, BookOpen, ShoppingBag } from 'lucide-react';
 import { supabase } from '@/lib/supabaseClient';
 import { useStore } from '@/store/StoreContext';
 import { formatNaira } from '@/lib/format';
@@ -414,7 +414,6 @@ export default function ArticleDetailPage({ slug }: { slug: string }) {
                   ))}
                   {sec.callout && (
                     <div className="my-6 rounded-3xl bg-blush-50/80 border border-blush-200/70 p-5 sm:p-6 text-berry-800 flex items-start gap-3">
-                      <Sparkles className="w-5 h-5 text-blush-500 shrink-0 mt-0.5" />
                       <p className="text-sm sm:text-base font-medium italic text-berry-800">
                         {sec.callout}
                       </p>
@@ -459,7 +458,6 @@ export default function ArticleDetailPage({ slug }: { slug: string }) {
         {recommendedItems.length > 0 && (
           <section className="mt-12 rounded-4xl bg-gradient-blush p-6 sm:p-8 border border-blush-200">
             <div className="flex items-center gap-2 mb-2">
-              <Sparkles className="w-4 h-4 text-blush-500" />
               <span className="text-xs uppercase tracking-wider font-bold text-berry-700">Haven Recommendations</span>
             </div>
             <h3 className="font-serif text-xl sm:text-2xl font-bold text-berry-900 mb-6">

@@ -5,7 +5,6 @@ import {
   MapPin,
   Phone,
   Send,
-  Sparkles,
   MessageCircle,
   ExternalLink,
 } from 'lucide-react';
@@ -92,7 +91,6 @@ export default function Footer() {
         <div className="relative container-jazelle py-14 sm:py-16">
           <div className="max-w-2xl mx-auto text-center">
             <div className="inline-flex items-center gap-2 mb-3">
-              <Sparkles className="w-4 h-4 text-blush-400" />
               <span className="section-subtitle">Join the Haven</span>
             </div>
             <h2 className="font-display text-3xl sm:text-4xl font-medium text-berry-800 text-balance mb-3">
@@ -294,9 +292,6 @@ export default function Footer() {
               </a>
               <a href="/terms" className="hover:text-blush-300 transition-colors">
                 Terms
-              </a>
-              <a href="/admin" className="hover:text-blush-300 transition-colors">
-                Admin Portal
               </a>
             </div>
           </div>

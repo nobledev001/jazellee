@@ -83,7 +83,7 @@ export const DEFAULT_SITE_SETTINGS: SiteSettings = {
   testimonials_title: 'Sweet words from the Haven',
   testimonials_subtitle: 'Real Customer Love',
 
-  announcement_bar: '✨ Free delivery on orders over ₦35,000 • Nationwide shipping across Nigeria',
+  announcement_bar: 'Free delivery on orders over ₦35,000 • Nationwide shipping across Nigeria',
   whatsapp_number: '2348000000000',
   support_email: 'hello@jazelle.ng',
   instagram_handle: '@jazelleskinhaven',
@@ -206,13 +206,13 @@ export const SiteSettingsProvider: React.FC<{ children: ReactNode }> = ({ childr
   const getSetting = useCallback(
     (key: string, fallback?: string): string => {
       const val = settings[key];
-      if (val !== undefined && val !== '') {
-        return val;
-      }
-      if (fallback !== undefined) {
-        return fallback;
-      }
-      return DEFAULT_SITE_SETTINGS[key] ?? '';
+      const raw =
+        val !== undefined && val !== ''
+          ? val
+          : fallback !== undefined
+          ? fallback
+          : DEFAULT_SITE_SETTINGS[key] ?? '';
+      return raw.replace(/[✨⭐🌟💫]/gu, '').replace(/\s{2,}/g, ' ').trim();
     },
     [settings]
   );
