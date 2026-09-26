@@ -7,15 +7,16 @@ import { getWhatsAppLink } from '@/lib/whatsapp';
 import ProductCard from '@/components/ProductCard';
 
 export default function ProductDetailPage({ slug }: { slug: string }) {
-  const product = getProduct(slug);
-  const { addToCart, toggleWishlist, isWishlisted } = useStore();
+  const { addToCart, toggleWishlist, isWishlisted, getProduct: getStoreProduct, products } = useStore();
+  const product = getStoreProduct(slug) || getProduct(slug);
   const [activeImage, setActiveImage] = useState(0);
   const [quantity, setQuantity] = useState(1);
 
   if (!product) return <main className="container-jazelle py-20 text-center"><h1 className="section-title">Product not found</h1><p className="mt-2 text-berry-400">This product may have sold out or moved.</p><a href="/shop" className="btn-primary mt-6">Back to Shop</a></main>;
 
   const saved = isWishlisted(product.slug);
-  const related = PRODUCTS.filter((item) => item.category === product.category && item.slug !== product.slug).slice(0, 4);
+  const catalogList = products && products.length > 0 ? products : PRODUCTS;
+  const related = catalogList.filter((item) => item.category === product.category && item.slug !== product.slug).slice(0, 4);
 
   return (
     <main className="bg-cream-50">
@@ -43,7 +44,15 @@ export default function ProductDetailPage({ slug }: { slug: string }) {
               <button onClick={() => { for (let index = 0; index < quantity; index++) addToCart(product.slug); }} className="btn-primary"><ShoppingBag className="h-4 w-4" /> Add to Cart</button>
               <button onClick={() => toggleWishlist(product.slug)} className={`flex h-12 w-12 items-center justify-center rounded-full border transition-colors ${saved ? 'border-blush-400 bg-blush-50 text-blush-500' : 'border-blush-200 bg-white text-berry-400 hover:border-blush-300 hover:text-blush-500'}`} aria-label={saved ? 'Remove from wishlist' : 'Add to wishlist'}><Heart className={`h-5 w-5 ${saved ? 'fill-current' : ''}`} /></button>
             </div>
-            <a href="/cart" className="btn-secondary mt-3 w-full sm:w-auto">Buy Now <ArrowRight className="h-4 w-4" /></a>
+            <button
+              onClick={() => {
+                for (let index = 0; index < quantity; index++) addToCart(product.slug);
+                window.location.href = '/checkout';
+              }}
+              className="btn-secondary mt-3 w-full sm:w-auto cursor-pointer"
+            >
+              Buy Now <ArrowRight className="h-4 w-4" />
+            </button>
 
             {/* Quick perks */}
             <div className="mt-6 grid grid-cols-3 gap-3 text-center"><div className="rounded-3xl bg-blush-50 p-3"><Truck className="mx-auto h-5 w-5 text-blush-400" /><p className="mt-1 text-[0.7rem] font-medium text-berry-500">Delivered across Nigeria</p></div><div className="rounded-3xl bg-blush-50 p-3"><Shield className="mx-auto h-5 w-5 text-blush-400" /><p className="mt-1 text-[0.7rem] font-medium text-berry-500">Gentle, skin-friendly</p></div><div className="rounded-3xl bg-blush-50 p-3"><RotateCcw className="mx-auto h-5 w-5 text-blush-400" /><p className="mt-1 text-[0.7rem] font-medium text-berry-500">Easy returns</p></div></div>

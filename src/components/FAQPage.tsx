@@ -1,6 +1,29 @@
-import { useState } from 'react';
-import { ChevronDown, MessageCircle, Truck, CreditCard, RefreshCw, ShieldCheck, Package, Phone } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import {
+  ChevronDown,
+  MessageCircle,
+  Truck,
+  CreditCard,
+  RefreshCw,
+  ShieldCheck,
+  Package,
+  Phone,
+  HelpCircle,
+  type LucideIcon,
+} from 'lucide-react';
 import { getWhatsAppLink } from '@/lib/whatsapp';
+import { supabase } from '@/lib/supabaseClient';
+
+const ICON_MAP: Record<string, LucideIcon> = {
+  Truck,
+  Package,
+  CreditCard,
+  MessageCircle,
+  RefreshCw,
+  Phone,
+  ShieldCheck,
+  HelpCircle,
+};
 
 interface FAQItem {
   question: string;
@@ -9,8 +32,23 @@ interface FAQItem {
 
 interface FAQSection {
   title: string;
-  icon: typeof Truck;
+  icon: LucideIcon;
   items: FAQItem[];
+}
+
+interface DbFaqSectionRow {
+  id: string;
+  title: string;
+  icon: string;
+  sort_order: number;
+}
+
+interface DbFaqItemRow {
+  id: string;
+  section_id: string;
+  question: string;
+  answer: string;
+  sort_order: number;
 }
 
 const SECTIONS: FAQSection[] = [
@@ -71,8 +109,44 @@ const SECTIONS: FAQSection[] = [
 ];
 
 export default function FAQPage() {
-  const [openSection, setOpenSection] = useState<string | null>(SECTIONS[0].title);
+  const [sections, setSections] = useState<FAQSection[]>(SECTIONS);
+  const [openSection, setOpenSection] = useState<string | null>(SECTIONS[0]?.title || null);
   const [openQuestion, setOpenQuestion] = useState<string | null>(null);
+
+  useEffect(() => {
+    Promise.all([
+      supabase.from('faq_sections').select('*').order('sort_order', { ascending: true }),
+      supabase.from('faq_items').select('*').order('sort_order', { ascending: true }),
+    ])
+      .then(([secRes, itemRes]) => {
+        if (secRes.data && secRes.data.length > 0) {
+          const dbSections = secRes.data as unknown as DbFaqSectionRow[];
+          const dbItems = (itemRes.data || []) as unknown as DbFaqItemRow[];
+
+          const mapped: FAQSection[] = dbSections.map((sec) => {
+            const items = dbItems
+              .filter((it) => it.section_id === sec.id)
+              .map((it) => ({
+                question: it.question,
+                answer: it.answer,
+              }));
+
+            const IconComponent = ICON_MAP[sec.icon] || HelpCircle;
+            return {
+              title: sec.title,
+              icon: IconComponent,
+              items,
+            };
+          });
+
+          setSections(mapped);
+          if (mapped.length > 0) {
+            setOpenSection(mapped[0].title);
+          }
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   return (
     <main className="bg-cream-50">
@@ -89,7 +163,7 @@ export default function FAQPage() {
 
       <div className="container-jazelle py-10 sm:py-14">
         <div className="mx-auto max-w-3xl space-y-4">
-          {SECTIONS.map((section) => {
+          {sections.map((section) => {
             const Icon = section.icon;
             const isOpen = openSection === section.title;
             return (

@@ -1,15 +1,16 @@
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '@/lib/supabaseClient';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
-
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+export { supabase };
 
 export interface Profile {
   id: string;
   email: string;
   role: string;
   display_name: string;
+  phone?: string;
+  created_at?: string;
+  orders_count?: number;
+  total_spent?: number;
 }
 
 export interface DbProduct {
@@ -44,6 +45,8 @@ export interface DbOrder {
   discount_amount: number;
   total: number;
   status: string;
+  payment_status?: string;
+  payment_reference?: string;
   customer_name: string;
   customer_email: string;
   customer_phone: string;
@@ -53,6 +56,8 @@ export interface DbOrder {
   delivery_landmark: string;
   payment_method: string;
   coupon_code: string | null;
+  reminder_sent?: boolean;
+  reminder_sent_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -137,3 +142,44 @@ export interface DbJazellePick {
 }
 
 export type SiteSettings = Record<string, string>;
+
+export async function ensureStorageBucket(bucketName = 'product-images'): Promise<void> {
+  try {
+    const { data: buckets } = await supabase.storage.listBuckets();
+    const found = buckets?.some((b) => b.id === bucketName || b.name === bucketName);
+    if (!found) {
+      await supabase.storage.createBucket(bucketName, { public: true });
+    }
+  } catch (e) {
+    console.warn('Storage bucket check/create notice:', e);
+  }
+}
+
+export async function uploadProductImage(file: File, bucketName = 'product-images'): Promise<string> {
+  await ensureStorageBucket(bucketName);
+
+  const ext = file.name.split('.').pop() || 'jpg';
+  const cleanName = file.name
+    .replace(/\.[^/.]+$/, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '-');
+  const path = `${Date.now()}-${cleanName}.${ext}`;
+
+  const { data, error } = await supabase.storage.from(bucketName).upload(path, file, {
+    cacheControl: '3600',
+    upsert: true,
+  });
+
+  if (error) {
+    console.warn('Storage upload error, falling back to data URL:', error);
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  const { data: urlData } = supabase.storage.from(bucketName).getPublicUrl(data?.path || path);
+  return urlData.publicUrl;
+}

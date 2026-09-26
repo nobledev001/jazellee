@@ -1,4 +1,6 @@
+import { useState, useEffect } from 'react';
 import { Clock, ArrowRight, BookOpen } from 'lucide-react';
+import { supabase } from '@/lib/supabaseClient';
 
 interface Article {
   slug: string;
@@ -8,6 +10,16 @@ interface Article {
   readTime: string;
   image: string;
   featured?: boolean;
+}
+
+interface DbJournalArticleRow {
+  slug: string;
+  title: string;
+  excerpt: string;
+  category: string;
+  read_time?: string;
+  image: string;
+  is_featured?: boolean;
 }
 
 const ARTICLES: Article[] = [
@@ -63,8 +75,34 @@ const ARTICLES: Article[] = [
 ];
 
 export default function JournalPage() {
-  const featured = ARTICLES.find((article) => article.featured);
-  const rest = ARTICLES.filter((article) => !article.featured);
+  const [articles, setArticles] = useState<Article[]>(ARTICLES);
+
+  useEffect(() => {
+    supabase
+      .from('journal_articles')
+      .select('*')
+      .eq('is_published', true)
+      .order('sort_order', { ascending: true })
+      .then(({ data }) => {
+        if (data && data.length > 0) {
+          const rows = data as unknown as DbJournalArticleRow[];
+          const mapped: Article[] = rows.map((d) => ({
+            slug: d.slug,
+            title: d.title,
+            excerpt: d.excerpt,
+            category: d.category,
+            readTime: d.read_time || '4 min read',
+            image: d.image,
+            featured: d.is_featured,
+          }));
+          setArticles(mapped);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const featured = articles.find((article) => article.featured) || articles[0];
+  const rest = articles.filter((article) => article !== featured);
 
   return (
     <main className="bg-cream-50">

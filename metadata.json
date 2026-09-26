@@ -1,0 +1,6 @@
+{
+  "name": "Jazelle Skin Haven",
+  "description": "Skincare, body-care, grooming and self-care for the modern Nigerian woman. Delivering across Nigeria.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

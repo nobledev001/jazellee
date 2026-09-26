@@ -4,42 +4,44 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        display: ['"Cormorant Garamond"', 'Georgia', 'serif'],
-        sans: ['"Plus Jakarta Sans"', 'system-ui', 'sans-serif'],
+        display: ['Roboto', 'system-ui', 'sans-serif'],
+        sans: ['Roboto', 'system-ui', 'sans-serif'],
       },
       colors: {
         blush: {
-          50: '#FBE9EE',
-          100: '#F9D9E1',
-          200: '#F7C9D6',
-          300: '#F5BCCB',
-          400: '#F3B1C2',
-          500: '#F2A9BC',
-          600: '#D9789A',
-          700: '#C15D80',
-          800: '#A1365B',
-          900: '#752441',
+          50: '#FCF3F7',
+          100: '#F8DDE9',
+          200: '#F5BCD5',
+          300: '#F28CB8',
+          400: '#F25A9B',
+          500: '#F13184', // LOGO PINK (base) — primary brand color, buttons, links, logo
+          600: '#D70F65', // deep pink — active/pressed states
+          700: '#A20B4C', // dark pink — headings on light bg, emphasis
+          800: '#760536', // darkest — text on pink backgrounds
+          900: '#4F0322',
         },
         rose: {
-          50: '#FCF6F8',
-          100: '#F8E6EC',
-          200: '#F2CEDA',
-          300: '#EBB4C6',
-          400: '#E39BB4',
-          500: '#D9789A',
-          600: '#C15D80',
-          700: '#A1365B',
-          800: '#752441',
-          900: '#4E1830',
+          // same ramp, mirrored for consistency since this scale is barely used elsewhere
+          50: '#FCF3F7',
+          100: '#F8DDE9',
+          200: '#F5BCD5',
+          300: '#F28CB8',
+          400: '#F25A9B',
+          500: '#F13184',
+          600: '#D70F65',
+          700: '#A20B4C',
+          800: '#760536',
+          900: '#4F0322',
         },
         berry: {
-          300: '#D29EAC',
-          400: '#C36F85',
-          500: '#B44B67',
-          600: '#9A3D56',
-          700: '#8C3A50',
-          800: '#6C273A',
-          900: '#481825',
+          // one step darker than blush at each index — this is the scale used for body/heading text sitewide
+          300: '#F5BCD5',
+          400: '#F28CB8',
+          500: '#F25A9B',
+          600: '#F13184',
+          700: '#D70F65',
+          800: '#A20B4C',
+          900: '#760536',
         },
         cream: {
           50: '#FFF9F5',
@@ -53,7 +55,6 @@ export default {
           800: '#5A3E2B',
           900: '#37261B',
         },
-        logo: '#F13184',
         sage: {
           50: '#f7f9f6',
           100: '#eef3ec',
@@ -84,10 +85,10 @@ export default {
         '5xl': '2.5rem',
       },
       boxShadow: {
-        soft: '0 2px 12px rgba(242, 169, 188, 0.08)',
-        'soft-lg': '0 8px 30px rgba(242, 169, 188, 0.12)',
-        'soft-xl': '0 12px 40px rgba(242, 169, 188, 0.15)',
-        'inner-soft': 'inset 0 1px 3px rgba(242, 169, 188, 0.06)',
+        soft: '0 2px 12px rgba(241, 49, 132, 0.08)',
+        'soft-lg': '0 8px 30px rgba(241, 49, 132, 0.12)',
+        'soft-xl': '0 12px 40px rgba(241, 49, 132, 0.15)',
+        'inner-soft': 'inset 0 1px 3px rgba(241, 49, 132, 0.06)',
       },
       keyframes: {
         'fade-in': {

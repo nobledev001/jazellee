@@ -1,7 +1,7 @@
+import { useMemo } from 'react';
 import { useCountdown } from '@/hooks/useCountdown';
 import { PartyPopper, Sparkles } from 'lucide-react';
-
-const LAUNCH_DATE = new Date('2026-10-10T00:00:00');
+import { useSiteSettings } from '@/hooks/useSiteSettings';
 
 function TimeUnit({ value, label }: { value: number; label: string }) {
   const display = String(value).padStart(2, '0');
@@ -21,7 +21,33 @@ function TimeUnit({ value, label }: { value: number; label: string }) {
 }
 
 export default function Countdown() {
-  const { timeLeft, isComplete } = useCountdown(LAUNCH_DATE);
+  const { getSetting } = useSiteSettings();
+
+  const enabled = getSetting('countdown_enabled', 'true') === 'true';
+  const targetDateStr = getSetting('countdown_target_date', '2026-10-10T00:00:00');
+  const headline = getSetting('countdown_headline', 'Our full shop goes live soon');
+  const subtext = getSetting('countdown_subtext', 'Counting down to something special');
+  const liveHeadline = getSetting('countdown_live_headline', "We're live!");
+  const liveSubtext = getSetting(
+    'countdown_live_subtext',
+    'The Jazelle Skin Haven shop is officially open. Come explore our full collection of self-care favourites.'
+  );
+
+  const targetDate = useMemo(() => {
+    try {
+      const d = new Date(targetDateStr);
+      if (!isNaN(d.getTime())) return d;
+    } catch {
+      // ignore
+    }
+    return new Date('2026-10-10T00:00:00');
+  }, [targetDateStr]);
+
+  const { timeLeft, isComplete } = useCountdown(targetDate);
+
+  if (!enabled) {
+    return null;
+  }
 
   if (isComplete) {
     return (
@@ -34,11 +60,10 @@ export default function Countdown() {
               <PartyPopper className="w-8 h-8" />
             </div>
             <h2 className="font-display text-3xl sm:text-4xl lg:text-5xl font-medium text-berry-800 mb-3 text-balance">
-              We're live!
+              {liveHeadline}
             </h2>
             <p className="text-berry-500 text-base sm:text-lg max-w-md mx-auto mb-6">
-              The Jazelle Skin Haven shop is officially open. Come explore our
-              full collection of self-care favourites.
+              {liveSubtext}
             </p>
             <a href="/shop" className="btn-primary">
               <Sparkles className="w-4 h-4" />
@@ -57,13 +82,13 @@ export default function Countdown() {
         <div className="relative text-center">
           <div className="inline-flex items-center gap-2 mb-3">
             <Sparkles className="w-4 h-4 text-blush-400" />
-            <span className="section-subtitle">Launching Soon</span>
+            <span className="section-subtitle">Special Event</span>
           </div>
           <h2 className="font-display text-2xl sm:text-3xl font-medium text-berry-800 mb-2 text-balance">
-            Our full shop goes live October 10th
+            {headline}
           </h2>
           <p className="text-berry-400 text-sm sm:text-base mb-7">
-            Counting down to something special
+            {subtext}
           </p>
 
           <div className="flex items-center justify-center gap-3 sm:gap-4 lg:gap-6">

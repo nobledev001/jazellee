@@ -1,9 +1,12 @@
-import { useEffect, useState } from 'react';
-import { ArrowRight, CreditCard, Building2, Smartphone, Check, Lock, ChevronDown } from 'lucide-react';
+import { useEffect, useState, useRef } from 'react';
+import { ArrowRight, CreditCard, Building2, Smartphone, Check, Lock, ChevronDown, AlertCircle, Sparkles } from 'lucide-react';
 import { useStore, getCartProducts } from '@/store/StoreContext';
 import { formatNaira } from '@/lib/format';
 import { useRouter } from '@/router';
-import { useAuth, supabase } from '@/lib/auth';
+import { useAuth, supabase, recordCustomerProfile } from '@/lib/auth';
+import { decreaseProductStock } from '@/lib/stock';
+import { sendOrderConfirmationEmail } from '@/lib/email';
+import { getPaystackPublicKey, verifyPaystackTransactionOnServer, ensurePaystackScriptLoaded } from '@/lib/paystack';
 
 type PaymentMethod = 'card' | 'bank' | 'ussd';
 
@@ -14,33 +17,143 @@ const NIGERIAN_STATES = [
   'Abia', 'Adamawa', 'Akwa Ibom', 'Anambra', 'Bauchi', 'Bayelsa', 'Benue', 'Borno', 'Cross River', 'Delta', 'Ebonyi', 'Edo', 'Ekiti', 'Enugu', 'FCT (Abuja)', 'Gombe', 'Imo', 'Jigawa', 'Kaduna', 'Kano', 'Katsina', 'Kebbi', 'Kogi', 'Kwara', 'Lagos', 'Nasarawa', 'Niger', 'Ogun', 'Ondo', 'Osun', 'Oyo', 'Plateau', 'Rivers', 'Sokoto', 'Taraba', 'Yobe', 'Zamfara',
 ];
 
+declare global {
+  interface Window {
+    PaystackPop?: {
+      setup: (options: {
+        key: string;
+        email: string;
+        amount: number;
+        currency?: string;
+        ref?: string;
+        channels?: string[];
+        metadata?: Record<string, unknown>;
+        callback: (response: { reference: string; status: string; trxref: string }) => void;
+        onClose: () => void;
+      }) => {
+        openIframe: () => void;
+      };
+    };
+  }
+}
+
 export default function CheckoutPage() {
   const { cart, cartSubtotal, clearCart } = useStore();
   const { navigate } = useRouter();
-  const { user, loading } = useAuth();
+  const { user } = useAuth();
   const items = getCartProducts(cart);
 
   const [form, setForm] = useState({
-    fullName: '', email: '', phone: '',
-    address: '', state: '', lga: '', landmark: '',
+    fullName: '',
+    email: '',
+    phone: '',
+    address: '',
+    state: '',
+    lga: '',
+    landmark: '',
     paymentMethod: 'card' as PaymentMethod,
   });
 
+  const [subscribeNewsletter, setSubscribeNewsletter] = useState(true);
+  const [resumedOrderNumber, setResumedOrderNumber] = useState<string | null>(null);
+  // Generate ONE transaction reference per checkout attempt, stored in state, reused if user retries
+  const [checkoutReference, setCheckoutReference] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const resumeCode = params.get('resume')?.trim();
+      if (resumeCode) return resumeCode;
+    }
+    return `JAZ-${Date.now().toString().slice(-8)}`;
+  });
+  const isSubmittingRef = useRef(false);
+  const [restoringCart, setRestoringCart] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [paymentNotice, setPaymentNotice] = useState<string | null>(null);
 
+  // Check for ?resume=... in URL to restore pending order
   useEffect(() => {
-    if (!loading && !user) navigate('/login');
-  }, [user, loading, navigate]);
+    const params = new URLSearchParams(window.location.search);
+    const resumeCode = params.get('resume')?.trim();
+    if (resumeCode) {
+      setRestoringCart(true);
+      (async () => {
+        try {
+          const { data, error } = await supabase
+            .from('orders')
+            .select('*')
+            .eq('order_number', resumeCode)
+            .maybeSingle();
 
-  if (loading || !user) {
-    return <main className="container-jazelle py-16 text-center"><p className="text-berry-400">Loading...</p></main>;
+          if (!error && data) {
+            const ord = data as Record<string, unknown>;
+            if (ord.status === 'pending' || (ord.status !== 'placed' && ord.payment_status !== 'paid')) {
+              const code = String(ord.order_number || resumeCode);
+              setResumedOrderNumber(code);
+              setCheckoutReference(code);
+              setForm((prev) => ({
+                ...prev,
+                fullName: String(ord.customer_name || prev.fullName),
+                email: String(ord.customer_email || prev.email),
+                phone: String(ord.customer_phone || prev.phone),
+                address: String(ord.delivery_address || prev.address),
+                state: String(ord.delivery_state || prev.state),
+                lga: String(ord.delivery_lga || prev.lga),
+                landmark: String(ord.delivery_landmark || prev.landmark),
+                paymentMethod: (ord.payment_method as PaymentMethod) || prev.paymentMethod,
+              }));
+
+              // If local cart is empty, restore items from this order into cart
+              const currentCartRaw = localStorage.getItem('jazelle-cart');
+              const currentCart = currentCartRaw ? JSON.parse(currentCartRaw) : {};
+              if (Object.keys(currentCart).length === 0 && Array.isArray(ord.items) && ord.items.length > 0) {
+                const restoredCart: Record<string, number> = {};
+                for (const it of ord.items as Array<{ slug?: string; quantity?: number }>) {
+                  if (it.slug) restoredCart[it.slug] = it.quantity || 1;
+                }
+                localStorage.setItem('jazelle-cart', JSON.stringify(restoredCart));
+                window.location.reload();
+                return;
+              }
+            }
+          }
+        } catch (err) {
+          console.warn('[Checkout] Order restore notice:', err);
+        } finally {
+          setRestoringCart(false);
+        }
+      })();
+    }
+  }, []);
+
+  // Pre-fill user data if authenticated, but allow guest checkout
+  useEffect(() => {
+    if (user) {
+      setForm((prev) => ({
+        ...prev,
+        fullName: prev.fullName || (user.user_metadata?.full_name as string) || '',
+        email: prev.email || user.email || '',
+      }));
+    }
+  }, [user]);
+
+  if (restoringCart) {
+    return (
+      <main className="container-jazelle py-16 text-center">
+        <div className="flex flex-col items-center justify-center gap-3">
+          <div className="w-8 h-8 border-3 border-blush-400 border-t-transparent rounded-full animate-spin" />
+          <h1 className="font-display text-lg font-medium text-berry-800">Restoring your cart...</h1>
+          <p className="text-xs text-berry-400">Retrieving your reserved self-care items from pending order.</p>
+        </div>
+      </main>
+    );
   }
 
   if (items.length === 0) {
     return (
       <main className="container-jazelle py-16 text-center">
         <h1 className="section-title">Your cart is empty</h1>
+        <p className="mt-2 text-sm text-berry-400">Discover little daily luxuries to add to your routine.</p>
         <a href="/shop" className="btn-primary mt-6">Browse the shop</a>
       </main>
     );
@@ -51,138 +164,608 @@ export default function CheckoutPage() {
 
   const validate = (): boolean => {
     const next: Record<string, string> = {};
-    if (!form.fullName.trim()) next.fullName = 'Please enter your full name';
-    if (!form.email.trim()) next.email = 'Please enter your email';
-    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) next.email = 'Please enter a valid email';
-    if (!form.phone.trim()) next.phone = 'Please enter your phone number';
-    else if (!/^\+?[\d\s-]{10,}$/.test(form.phone)) next.phone = 'Please enter a valid phone number';
-    if (!form.address.trim()) next.address = 'Please enter your delivery address';
+    const fullNameTrim = form.fullName.trim();
+    if (!fullNameTrim) next.fullName = 'Please enter your full name';
+    else if (fullNameTrim.length < 2 || fullNameTrim.length > 100) next.fullName = 'Full name must be between 2 and 100 characters';
+
+    const emailTrim = form.email.trim();
+    if (!emailTrim) next.email = 'Please enter your email';
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailTrim) || emailTrim.length > 120) next.email = 'Please enter a valid email address';
+
+    const phoneClean = form.phone.replace(/[\s-]/g, '');
+    if (!phoneClean) next.phone = 'Please enter your phone number';
+    else if (!/^\+?[\d]{10,15}$/.test(phoneClean)) next.phone = 'Please enter a valid phone number (10 to 15 digits)';
+
+    const addressTrim = form.address.trim();
+    if (!addressTrim) next.address = 'Please enter your delivery address';
+    else if (addressTrim.length > 300) next.address = 'Address is too long (max 300 characters)';
+
     if (!form.state) next.state = 'Please select your state';
-    if (!form.lga.trim()) next.lga = 'Please enter your LGA or city area';
+
+    const lgaTrim = form.lga.trim();
+    if (!lgaTrim) next.lga = 'Please enter your LGA or city area';
+    else if (lgaTrim.length > 100) next.lga = 'LGA/city must be under 100 characters';
+
     setErrors(next);
     return Object.keys(next).length === 0;
   };
 
+  /**
+   * Finalizes order upon verified Paystack payment:
+   * 1. Updates order status in Supabase to 'placed'
+   * 2. Automatically decreases product stock (idempotent with orderNumber)
+   * 3. Sends transactional order confirmation email
+   * 4. Clears cart and navigates to confirmation page
+   */
+  const handlePaymentSuccess = async (paymentRef: string, orderNumber: string) => {
+    try {
+      console.group('💳 [CHECKOUT] Step 2: Post-Payment Order Update');
+      console.log('1. Payment succeeded via Paystack with reference:', paymentRef);
+      console.log('2. Updating order status to "placed" in Supabase for order:', orderNumber);
+
+      // Server/Database Idempotency Check: if already finalized by webhook or concurrent callback, skip
+      const { data: existingOrder } = await supabase
+        .from('orders')
+        .select('status, stock_decremented')
+        .eq('order_number', orderNumber)
+        .maybeSingle();
+
+      if (existingOrder?.status === 'placed' && existingOrder?.stock_decremented === true) {
+        console.log('[Checkout Idempotency] Order already finalized and stock decremented in database. Skipping duplicate finalization.');
+        clearCart();
+        isSubmittingRef.current = false;
+        setProcessing(false);
+        navigate(`/order-confirmation?id=${orderNumber}`);
+        return;
+      }
+
+      // 1. Get authenticated user ID if logged in
+      const { data: authData } = await supabase.auth.getSession();
+      const currentUserId = authData?.session?.user?.id;
+
+      const orderPayload: Record<string, unknown> = {
+        order_number: orderNumber,
+        payment_reference: paymentRef,
+        items: items.map(({ product, quantity }) => ({
+          slug: product.slug,
+          name: product.name,
+          price: product.price,
+          quantity,
+          image: product.image,
+        })),
+        subtotal: cartSubtotal,
+        delivery_fee: deliveryFee,
+        total,
+        customer_name: form.fullName.trim(),
+        customer_email: form.email.trim(),
+        customer_phone: form.phone.trim(),
+        delivery_address: form.address.trim(),
+        delivery_state: form.state,
+        delivery_lga: form.lga.trim(),
+        delivery_landmark: form.landmark.trim(),
+        payment_method: form.paymentMethod,
+        payment_status: 'paid',
+        status: 'placed',
+        updated_at: new Date().toISOString(),
+      };
+
+      if (currentUserId && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(currentUserId)) {
+        orderPayload.user_id = currentUserId;
+      }
+
+      // Record shopper profile in customer directory
+      void recordCustomerProfile({
+        id: currentUserId || undefined,
+        email: form.email.trim(),
+        fullName: form.fullName.trim(),
+        phone: form.phone.trim(),
+      });
+
+      // 2. Update order record in Supabase to mark as placed
+      const updateResult = await supabase
+        .from('orders')
+        .update({
+          status: 'placed',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('order_number', orderNumber);
+
+      if (updateResult.error) {
+        console.warn('⚠️ [CHECKOUT] Update error, falling back to direct insert:', updateResult.error);
+        const insertFallback = await supabase.from('orders').insert({
+          ...orderPayload,
+          status: 'placed',
+        });
+        if (insertFallback.error) {
+          console.error('❌ [CHECKOUT] Fallback insert also failed:', insertFallback.error);
+        } else {
+          console.log('✅ [CHECKOUT] Fallback insert created order with status="placed"');
+        }
+      } else {
+        console.log('✅ [CHECKOUT] Supabase order successfully marked as status="placed"!');
+      }
+      console.groupEnd();
+
+      // Notify admin & other windows that order is now paid
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('jazelle_orders_updated'));
+      }
+
+      // 3. Automatically decrease product stock idempotently with database-level guard
+      await decreaseProductStock(
+        items.map(({ product, quantity }) => ({
+          slug: product.slug,
+          name: product.name,
+          quantity,
+        })),
+        orderNumber,
+        paymentRef
+      );
+
+      // 4. Trigger transactional order confirmation email via Resend
+      await sendOrderConfirmationEmail({
+        order_number: orderNumber,
+        customer_name: form.fullName.trim(),
+        customer_email: form.email.trim(),
+        customer_phone: form.phone.trim(),
+        delivery_address: form.address.trim(),
+        delivery_state: form.state,
+        delivery_lga: form.lga.trim(),
+        items: items.map(({ product, quantity }) => ({
+          name: product.name,
+          quantity,
+          price: product.price,
+          image: product.image,
+        })),
+        subtotal: cartSubtotal,
+        delivery_fee: deliveryFee,
+        total,
+        payment_method: form.paymentMethod,
+      });
+
+      // 5. Clear cart and navigate to confirmation screen
+      clearCart();
+      isSubmittingRef.current = false;
+      setProcessing(false);
+      navigate(`/order-confirmation?id=${orderNumber}`);
+    } catch (err) {
+      console.error('[Checkout] Post-payment processing error:', err);
+      clearCart();
+      isSubmittingRef.current = false;
+      setProcessing(false);
+      navigate(`/order-confirmation?id=${orderNumber}`);
+    }
+  };
+
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!validate()) return;
+
+    // Immediate synchronous guard to prevent double-click or multiple modal spawns
+    if (processing || isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
     setProcessing(true);
 
-    await new Promise((resolve) => setTimeout(resolve, 2200));
-
-    const orderNumber = `JAZ-${Date.now().toString().slice(-8)}`;
-    const { data, error: insertError } = await supabase.from('orders').insert({
-      order_number: orderNumber,
-      items: items.map(({ product, quantity }) => ({ slug: product.slug, name: product.name, price: product.price, quantity, image: product.image })),
-      subtotal: cartSubtotal,
-      delivery_fee: deliveryFee,
-      total,
-      customer_name: form.fullName,
-      customer_email: form.email,
-      customer_phone: form.phone,
-      delivery_address: form.address,
-      delivery_state: form.state,
-      delivery_lga: form.lga,
-      delivery_landmark: form.landmark,
-      payment_method: form.paymentMethod,
-      status: 'placed',
-    }).select('order_number').single();
-
-    if (insertError || !data) {
+    if (!validate()) {
+      isSubmittingRef.current = false;
       setProcessing(false);
-      setErrors({ submit: 'Could not place order. Please try again.' });
+      return;
+    }
+    setPaymentNotice(null);
+
+    // Reuse ONE stable transaction reference for this checkout attempt across retries
+    const orderNumber = checkoutReference;
+    const paystackKey = getPaystackPublicKey();
+
+    // 1. AUTO-SUBSCRIBE TO NEWSLETTER ON CHECKOUT (if customer checked box)
+    if (subscribeNewsletter && form.email.trim()) {
+      try {
+        const cleanEmail = form.email.trim().toLowerCase();
+        void supabase.from('newsletter_subscribers').insert({
+          email: cleanEmail,
+          source: 'checkout',
+          created_at: new Date().toISOString(),
+        });
+
+        // Also persist in local newsletter storage
+        const localSubs = JSON.parse(localStorage.getItem('jazelle_newsletter_subscribers') || '[]');
+        if (!localSubs.some((s: { email?: string }) => s.email === cleanEmail)) {
+          localSubs.unshift({
+            email: cleanEmail,
+            source: 'checkout',
+            created_at: new Date().toISOString(),
+          });
+          localStorage.setItem('jazelle_newsletter_subscribers', JSON.stringify(localSubs));
+        }
+      } catch (newsErr) {
+        console.warn('[Checkout] Auto-subscribe newsletter notice:', newsErr);
+      }
+    }
+
+    // 2. CREATE PENDING ORDER RECORD IMMEDIATELY (BEFORE PAYMENT COMPLETES)
+    // This provides full admin visibility and cart recovery even if customer closes browser
+    try {
+      console.group('🛒 [CHECKOUT] Step 1: Pre-Payment Pending Order Insertion');
+      console.log('1. Initiating pre-payment pending order creation for order number:', orderNumber);
+      console.log('2. Customer details:', {
+        fullName: form.fullName.trim(),
+        email: form.email.trim(),
+        phone: form.phone.trim(),
+      });
+
+      const { data: authData } = await supabase.auth.getSession();
+      const currentUserId = authData?.session?.user?.id;
+
+      // Note: Only include columns that actually exist in the remote Supabase 'orders' schema.
+      // Columns like payment_status, reminder_sent, reminder_sent_at do not exist on the remote schema and cause PGRST204 errors.
+      const pendingPayload: Record<string, unknown> = {
+        order_number: orderNumber,
+        items: items.map(({ product, quantity }) => ({
+          slug: product.slug,
+          name: product.name,
+          price: product.price,
+          quantity,
+          image: product.image,
+        })),
+        subtotal: cartSubtotal,
+        delivery_fee: deliveryFee,
+        total,
+        status: 'pending',
+        customer_name: form.fullName.trim(),
+        customer_email: form.email.trim(),
+        customer_phone: form.phone.trim(),
+        delivery_address: form.address.trim(),
+        delivery_state: form.state,
+        delivery_lga: form.lga.trim(),
+        delivery_landmark: form.landmark.trim(),
+        payment_method: form.paymentMethod,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      if (currentUserId && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(currentUserId)) {
+        pendingPayload.user_id = currentUserId;
+      }
+
+      console.log('3. Sending pre-payment payload to Supabase "orders" table:', pendingPayload);
+
+      // Perform insertion into Supabase orders table
+      const insertResult = await supabase.from('orders').insert(pendingPayload);
+      console.log('4. Supabase raw insert response:', insertResult);
+
+      if (insertResult.error) {
+        if (insertResult.error.code === '23505') {
+          console.log('ℹ️ [CHECKOUT] Order number already exists in Supabase. Updating existing row with status="pending"...');
+          const updateResult = await supabase.from('orders').update(pendingPayload).eq('order_number', orderNumber);
+          if (updateResult.error) {
+            console.error('❌ [CHECKOUT] Supabase pre-payment update FAILED:', updateResult.error);
+          } else {
+            console.log('✅ [CHECKOUT] Supabase pre-payment order updated successfully with status="pending"!');
+          }
+        } else {
+          console.error('❌ [CHECKOUT] Supabase pre-payment insert FAILED:', insertResult.error);
+        }
+      } else {
+        console.log('✅ [CHECKOUT] Supabase pre-payment insert SUCCEEDED! Row created in "orders" table with status="pending".');
+      }
+      console.groupEnd();
+
+      // Save customer profile directory entry
+      void recordCustomerProfile({
+        id: currentUserId || undefined,
+        email: form.email.trim(),
+        fullName: form.fullName.trim(),
+        phone: form.phone.trim(),
+      });
+
+      // Broadcast order creation for real-time live admin sync
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('jazelle_orders_updated'));
+        window.dispatchEvent(new CustomEvent('jazelle_order_created', { detail: pendingPayload }));
+      }
+    } catch (pendingErr) {
+      console.error('❌ [CHECKOUT] Pre-payment pending order exception caught:', pendingErr);
+      console.groupEnd();
+    }
+
+    const channels: string[] =
+      form.paymentMethod === 'bank'
+        ? ['bank_transfer', 'bank']
+        : form.paymentMethod === 'ussd'
+        ? ['ussd']
+        : ['card', 'bank', 'ussd', 'bank_transfer', 'qr'];
+
+    // Ensure PaystackPop inline script is loaded
+    await ensurePaystackScriptLoaded();
+
+    if (typeof window.PaystackPop?.setup !== 'function') {
+      isSubmittingRef.current = false;
+      setProcessing(false);
+      setPaymentNotice(
+        'Unable to load Paystack checkout script. If you are using an ad blocker or privacy extension, please disable it for this site and try again, or open this store in a new browser tab.'
+      );
       return;
     }
 
-    clearCart();
-    setProcessing(false);
-    navigate(`/order-confirmation?id=${data.order_number}`);
+    try {
+      const handler = window.PaystackPop.setup({
+        key: paystackKey,
+        email: form.email,
+        amount: Math.round(total * 100), // in kobo
+        currency: 'NGN',
+        ref: orderNumber,
+        channels,
+        metadata: {
+          custom_fields: [
+            { display_name: 'Customer Name', variable_name: 'customer_name', value: form.fullName },
+            { display_name: 'Phone Number', variable_name: 'phone', value: form.phone },
+            {
+              display_name: 'Delivery Address',
+              variable_name: 'delivery_address',
+              value: `${form.address}, ${form.lga}, ${form.state}`,
+            },
+          ],
+        },
+        callback: function (response: { reference?: string; trxref?: string; status?: string; message?: string }) {
+          const paymentRef = response.reference || response.trxref || orderNumber;
+
+          setProcessing(true);
+          setPaymentNotice('Payment received by Paystack. Verifying transaction securely with backend...');
+
+          void (async () => {
+            const verification = await verifyPaystackTransactionOnServer(paymentRef, total);
+
+            if (!verification.verified) {
+              isSubmittingRef.current = false;
+              setProcessing(false);
+
+              const isIntegrationMismatch =
+                verification.status === 'transaction_not_found' ||
+                (typeof verification.message === 'string' && verification.message.includes('not found'));
+
+              if (isIntegrationMismatch) {
+                setPaymentNotice(
+                  `Paystack Verification Failed (Transaction Not Found): Paystack could not locate reference "${paymentRef}" on the configured integration. Please ensure your frontend VITE_PAYSTACK_PUBLIC_KEY and backend PAYSTACK_SECRET_KEY belong to the SAME Paystack account (and both are in Test mode).`
+                );
+              } else {
+                setPaymentNotice(
+                  `Paystack Verification Failed: ${verification.message || 'Transaction could not be verified'}`
+                );
+              }
+              return;
+            }
+
+            await handlePaymentSuccess(verification.reference || paymentRef, orderNumber);
+          })();
+        },
+        onClose: function () {
+          // Re-enable button on cancellation/close so user can retry with the same saved order reference
+          isSubmittingRef.current = false;
+          setProcessing(false);
+          setPaymentNotice(
+            'Payment window was closed. Your cart items are saved — please click below to retry whenever you are ready.'
+          );
+        },
+      });
+
+      if (!handler || typeof handler.openIframe !== 'function') {
+        throw new Error('PaystackPop setup did not return a valid handler object with openIframe');
+      }
+
+      handler.openIframe();
+    } catch (paystackErr: unknown) {
+      console.error('[Paystack Checkout] Error opening Paystack iframe popup:', paystackErr);
+      isSubmittingRef.current = false;
+      setProcessing(false);
+      const errMsg = paystackErr instanceof Error ? paystackErr.message : String(paystackErr);
+      setPaymentNotice(
+        `Could not open Paystack payment modal (${errMsg}). Please make sure popups and third-party frames are allowed in your browser, or open this application in a new browser tab.`
+      );
+    }
   };
 
   const paymentMethods: { id: PaymentMethod; label: string; description: string; icon: typeof CreditCard }[] = [
-    { id: 'card', label: 'Card', description: 'Visa, Mastercard, Verve', icon: CreditCard },
-    { id: 'bank', label: 'Bank Transfer', description: 'Transfer from your bank app', icon: Building2 },
-    { id: 'ussd', label: 'USSD', description: 'Dial a code from your phone', icon: Smartphone },
+    { id: 'card', label: 'Card Payment', description: 'Visa, Mastercard, Verve', icon: CreditCard },
+    { id: 'bank', label: 'Bank Transfer', description: 'Direct transfer from your Nigerian bank app', icon: Building2 },
+    { id: 'ussd', label: 'USSD Code', description: 'Dial your bank USSD code on your mobile', icon: Smartphone },
   ];
 
   return (
     <main className="container-jazelle py-10 sm:py-14">
-      <h1 className="section-title">Checkout</h1>
-      <p className="mt-2 text-sm text-berry-400">Almost there — just a few details and your self-care picks are on the way.</p>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+        <div>
+          <h1 className="section-title">Checkout</h1>
+          <p className="mt-2 text-sm text-berry-400">
+            Almost there &mdash; just a few details and your self-care picks will be on their way.
+          </p>
+        </div>
+        {!user && (
+          <div className="rounded-2xl bg-blush-50 px-4 py-2 text-xs text-blush-700 sm:text-right">
+            <span>Shopping as a guest. </span>
+            <a href="/login" className="font-semibold underline hover:text-blush-800">
+              Sign in
+            </a>{' '}
+            to save to your account.
+          </div>
+        )}
+      </div>
+
+      {resumedOrderNumber && (
+        <div className="mt-4 flex items-center justify-between gap-3 rounded-2xl bg-pink-50 p-4 text-xs text-pink-900 border border-pink-200 shadow-xs animate-fade-in-down">
+          <div className="flex items-center gap-2.5">
+            <Sparkles className="h-4 w-4 text-pink-600 flex-shrink-0" />
+            <span>
+              Welcome back! We restored your reserved items from pending Order <strong>#{resumedOrderNumber}</strong>. You can review your details and complete payment below.
+            </span>
+          </div>
+        </div>
+      )}
+
+      {paymentNotice && (
+        <div className="mt-6 flex items-center gap-2 rounded-3xl bg-blush-50 p-4 text-sm text-blush-700 animate-fade-in-down border border-blush-200">
+          <AlertCircle className="h-5 w-5 flex-shrink-0 text-blush-500" />
+          <span>{paymentNotice}</span>
+        </div>
+      )}
+
+      {errors.submit && (
+        <div className="mt-6 flex items-center gap-2 rounded-3xl bg-blush-50 p-4 text-sm text-blush-700 animate-fade-in-down">
+          <AlertCircle className="h-5 w-5 flex-shrink-0 text-blush-500" />
+          <span>{errors.submit}</span>
+        </div>
+      )}
 
       <form onSubmit={handleSubmit} className="mt-8 grid gap-8 lg:grid-cols-3">
         {/* Left: form fields */}
         <div className="space-y-6 lg:col-span-2">
           {/* Contact */}
           <section className="rounded-4xl bg-white p-6 shadow-soft">
-            <h2 className="font-display text-lg font-medium text-berry-800">Contact details</h2>
+            <h2 className="font-display text-lg font-medium text-berry-800">1. Contact details</h2>
             <div className="mt-4 grid gap-4 sm:grid-cols-2">
               <Field label="Full name" error={errors.fullName}>
-                <input className="input-jazelle" value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} placeholder="What should we call you?" />
+                <input
+                  className="input-jazelle"
+                  value={form.fullName}
+                  onChange={(e) => setForm({ ...form, fullName: e.target.value })}
+                  placeholder="What should we call you?"
+                />
               </Field>
-              <Field label="Email address" error={errors.email}>
-                <input type="email" className="input-jazelle" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="you@example.com" />
+              <Field label="Email address (for receipt & tracking)" error={errors.email}>
+                <input
+                  type="email"
+                  className="input-jazelle"
+                  value={form.email}
+                  onChange={(e) => setForm({ ...form, email: e.target.value })}
+                  placeholder="you@example.com"
+                />
               </Field>
-              <Field label="Phone number" error={errors.phone}>
-                <input type="tel" className="input-jazelle" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+234 801 234 5678" />
+              <Field label="Phone number (for delivery courier)" error={errors.phone}>
+                <input
+                  type="tel"
+                  className="input-jazelle"
+                  value={form.phone}
+                  onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                  placeholder="+234 801 234 5678"
+                />
               </Field>
+
+              {/* Newsletter auto-subscribe checkbox */}
+              <div className="sm:col-span-2 pt-1">
+                <label className="flex items-center gap-2.5 cursor-pointer select-none text-xs text-berry-700 hover:text-berry-900 transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={subscribeNewsletter}
+                    onChange={(e) => setSubscribeNewsletter(e.target.checked)}
+                    className="h-4 w-4 rounded border-blush-300 text-blush-600 focus:ring-blush-500 cursor-pointer accent-blush-500"
+                  />
+                  <span>Keep me updated on new drops and offers</span>
+                </label>
+              </div>
             </div>
           </section>
 
           {/* Delivery */}
           <section className="rounded-4xl bg-white p-6 shadow-soft">
-            <h2 className="font-display text-lg font-medium text-berry-800">Delivery address</h2>
+            <h2 className="font-display text-lg font-medium text-berry-800">2. Delivery address</h2>
             <div className="mt-4 space-y-4">
               <Field label="Street address" error={errors.address}>
-                <input className="input-jazelle" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} placeholder="House number, street name, area" />
+                <input
+                  className="input-jazelle"
+                  value={form.address}
+                  onChange={(e) => setForm({ ...form, address: e.target.value })}
+                  placeholder="House/flat number, street name, estate or area"
+                />
               </Field>
               <div className="grid gap-4 sm:grid-cols-2">
                 <Field label="State" error={errors.state}>
                   <div className="relative">
-                    <select className="input-jazelle appearance-none pr-10" value={form.state} onChange={(e) => setForm({ ...form, state: e.target.value })}>
+                    <select
+                      className="input-jazelle appearance-none pr-10"
+                      value={form.state}
+                      onChange={(e) => setForm({ ...form, state: e.target.value })}
+                    >
                       <option value="">Select state</option>
-                      {NIGERIAN_STATES.map((s) => <option key={s} value={s}>{s}</option>)}
+                      {NIGERIAN_STATES.map((s) => (
+                        <option key={s} value={s}>
+                          {s}
+                        </option>
+                      ))}
                     </select>
                     <ChevronDown className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 h-4 w-4 text-blush-300" />
                   </div>
                 </Field>
                 <Field label="LGA / City area" error={errors.lga}>
-                  <input className="input-jazelle" value={form.lga} onChange={(e) => setForm({ ...form, lga: e.target.value })} placeholder="e.g. Municipal Area Council" />
+                  <input
+                    className="input-jazelle"
+                    value={form.lga}
+                    onChange={(e) => setForm({ ...form, lga: e.target.value })}
+                    placeholder="e.g. Ikeja, Wuse II, Lekki Phase 1"
+                  />
                 </Field>
               </div>
-              <Field label="Landmark (optional)">
-                <input className="input-jazelle" value={form.landmark} onChange={(e) => setForm({ ...form, landmark: e.target.value })} placeholder="e.g. near the big mosque, opposite the filling station" />
+              <Field label="Nearest landmark (optional)">
+                <input
+                  className="input-jazelle"
+                  value={form.landmark}
+                  onChange={(e) => setForm({ ...form, landmark: e.target.value })}
+                  placeholder="e.g. Opposite the total filling station, near the yellow gate"
+                />
               </Field>
             </div>
           </section>
 
           {/* Payment */}
           <section className="rounded-4xl bg-white p-6 shadow-soft">
-            <h2 className="font-display text-lg font-medium text-berry-800">Payment method</h2>
-            <p className="mt-1 text-xs text-berry-400">Powered by Paystack. Your payment is secure and encrypted.</p>
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="font-display text-lg font-medium text-berry-800">3. Payment method</h2>
+                <p className="mt-1 text-xs text-berry-400">
+                  Powered by Paystack. Real-time encryption for Nigerian debit cards, bank transfers & USSD.
+                </p>
+              </div>
+              <span className="inline-flex items-center gap-1 rounded-full bg-sage-50 px-2.5 py-1 text-[0.7rem] font-semibold text-sage-700">
+                <Lock className="h-3 w-3" /> Secure Paystack
+              </span>
+            </div>
+
             <div className="mt-4 space-y-3">
               {paymentMethods.map((method) => {
                 const Icon = method.icon;
                 const active = form.paymentMethod === method.id;
                 return (
-                  <button key={method.id} type="button" onClick={() => setForm({ ...form, paymentMethod: method.id })} className={`flex w-full items-center gap-3 rounded-3xl border-2 p-4 text-left transition-all ${active ? 'border-blush-400 bg-blush-50' : 'border-blush-100 bg-white hover:border-blush-200'}`}>
-                    <span className={`flex h-10 w-10 items-center justify-center rounded-full ${active ? 'bg-blush-500 text-white' : 'bg-blush-50 text-blush-400'}`}>
+                  <button
+                    key={method.id}
+                    type="button"
+                    onClick={() => setForm({ ...form, paymentMethod: method.id })}
+                    className={`flex w-full items-center gap-3 rounded-3xl border-2 p-4 text-left transition-all ${
+                      active ? 'border-blush-500 bg-blush-50/70 shadow-sm' : 'border-blush-100 bg-white hover:border-blush-200'
+                    }`}
+                  >
+                    <span
+                      className={`flex h-10 w-10 items-center justify-center rounded-full ${
+                        active ? 'bg-blush-500 text-white' : 'bg-blush-50 text-blush-400'
+                      }`}
+                    >
                       <Icon className="h-5 w-5" />
                     </span>
                     <div className="flex-1">
                       <p className="text-sm font-semibold text-berry-700">{method.label}</p>
                       <p className="text-xs text-berry-400">{method.description}</p>
                     </div>
-                    <span className={`flex h-5 w-5 items-center justify-center rounded-full border-2 ${active ? 'border-blush-500 bg-blush-500' : 'border-blush-200'}`}>
+                    <span
+                      className={`flex h-5 w-5 items-center justify-center rounded-full border-2 ${
+                        active ? 'border-blush-500 bg-blush-500' : 'border-blush-200'
+                      }`}
+                    >
                       {active && <Check className="h-3 w-3 text-white" />}
                     </span>
                   </button>
                 );
               })}
             </div>
+
             <div className="mt-4 flex items-center gap-2 text-xs text-berry-400">
-              <Lock className="h-3.5 w-3.5" />
-              Your payment details are processed securely by Paystack. We never store your card information.
+              <Lock className="h-3.5 w-3.5 text-blush-400" />
+              <span>We never store your card numbers or banking PINs. All payments are verified securely via Paystack.</span>
             </div>
           </section>
         </div>
@@ -191,12 +774,14 @@ export default function CheckoutPage() {
         <div className="lg:col-span-1">
           <div className="sticky top-24 rounded-4xl bg-white p-6 shadow-soft">
             <h2 className="font-display text-lg font-medium text-berry-800">Order Summary</h2>
-            <div className="mt-4 space-y-3">
+            <div className="mt-4 space-y-3 max-h-72 overflow-y-auto pr-1">
               {items.map(({ product, quantity }) => (
-                <div key={product.slug} className="flex items-center gap-3">
+                <div key={product.slug} className="flex items-center gap-3 py-1">
                   <div className="relative flex-shrink-0">
                     <img src={product.image} alt={product.name} className="h-12 w-12 rounded-xl object-cover" />
-                    <span className="absolute -top-1.5 -right-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-blush-500 text-[0.65rem] font-bold text-white">{quantity}</span>
+                    <span className="absolute -top-1.5 -right-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-blush-500 text-[0.65rem] font-bold text-white">
+                      {quantity}
+                    </span>
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="truncate text-sm font-medium text-berry-700">{product.name}</p>
@@ -205,19 +790,52 @@ export default function CheckoutPage() {
                 </div>
               ))}
             </div>
+
             <div className="mt-4 space-y-2 border-t border-blush-100 pt-4 text-sm">
-              <div className="flex justify-between text-berry-500"><span>Subtotal</span><span className="font-medium text-berry-700">{formatNaira(cartSubtotal)}</span></div>
-              <div className="flex justify-between text-berry-500"><span>Delivery</span><span className="font-medium text-berry-700">{deliveryFee === 0 ? 'Free' : formatNaira(deliveryFee)}</span></div>
-              <div className="border-t border-blush-100 pt-2 flex justify-between text-base font-bold text-berry-800"><span>Total</span><span>{formatNaira(total)}</span></div>
+              <div className="flex justify-between text-berry-500">
+                <span>Subtotal</span>
+                <span className="font-medium text-berry-700">{formatNaira(cartSubtotal)}</span>
+              </div>
+              <div className="flex justify-between text-berry-500">
+                <span>Delivery across Nigeria</span>
+                <span className="font-medium text-berry-700">
+                  {deliveryFee === 0 ? (
+                    <span className="text-sage-600 font-semibold">Free Delivery</span>
+                  ) : (
+                    formatNaira(deliveryFee)
+                  )}
+                </span>
+              </div>
+              <div className="border-t border-blush-100 pt-2 flex justify-between text-base font-bold text-berry-800">
+                <span>Total</span>
+                <span>{formatNaira(total)}</span>
+              </div>
             </div>
-            <button type="submit" disabled={processing} className="btn-primary mt-6 w-full disabled:opacity-60 disabled:cursor-not-allowed">
+
+            <button
+              type="submit"
+              disabled={processing || isSubmittingRef.current}
+              className="btn-primary mt-6 w-full disabled:opacity-60 disabled:cursor-not-allowed disabled:pointer-events-none"
+            >
               {processing ? (
-                <><span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" /> Processing...</>
+                <>
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                  <span>Processing...</span>
+                </>
               ) : (
-                <>Pay {formatNaira(total)} <ArrowRight className="h-4 w-4" /></>
+                <>
+                  <span>Pay {formatNaira(total)}</span>
+                  <ArrowRight className="h-4 w-4" />
+                </>
               )}
             </button>
-            <p className="mt-3 text-center text-xs text-berry-400">By placing this order, you agree to our terms and privacy policy.</p>
+
+            <div className="mt-4 space-y-2 text-center text-xs text-berry-400">
+              <p className="flex items-center justify-center gap-1">
+                <Sparkles className="h-3 w-3 text-blush-400" /> Stock automatically reserved on payment
+              </p>
+              <p>By placing this order, you agree to our terms and privacy policy.</p>
+            </div>
           </div>
         </div>
       </form>
@@ -230,7 +848,7 @@ function Field({ label, error, children }: { label: string; error?: string; chil
     <label className="block">
       <span className="text-sm font-medium text-berry-700">{label}</span>
       <div className="mt-2">{children}</div>
-      {error && <p className="mt-1 text-xs text-blush-500">{error}</p>}
+      {error && <p className="mt-1 text-xs text-blush-600">{error}</p>}
     </label>
   );
 }

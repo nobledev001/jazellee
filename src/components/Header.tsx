@@ -5,12 +5,12 @@ import {
   ShoppingBag,
   Menu,
   X,
-  Heart,
   ChevronDown,
 } from 'lucide-react';
 import { useStore } from '@/store/StoreContext';
 import { useAuth } from '@/lib/auth';
 import Logo from '@/components/Logo';
+import { useSiteSettings } from '@/hooks/useSiteSettings';
 
 interface NavLink {
   label: string;
@@ -45,6 +45,12 @@ export default function Header() {
   const [cartPulse, setCartPulse] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
+  const { getSetting } = useSiteSettings();
+  const announcementText = getSetting(
+    'announcement_bar',
+    'Free delivery on orders over ₦40,000 — across Nigeria'
+  );
+
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 20);
     window.addEventListener('scroll', onScroll, { passive: true });
@@ -78,7 +84,7 @@ export default function Header() {
       {/* Announcement bar */}
       <div className="bg-berry-700 text-cream-100 text-center text-xs sm:text-sm py-2.5 px-4 font-medium tracking-wide">
         <span className="inline-flex items-center gap-1.5">
-          Free delivery on orders over &#8358;40,000 — across Nigeria
+          {announcementText}
         </span>
       </div>
 
@@ -91,7 +97,7 @@ export default function Header() {
         }`}
       >
         <div className="container-jazelle">
-          <div className="flex items-center justify-between h-16 sm:h-20">
+          <div className="flex items-center justify-between h-18 sm:h-20 md:h-22">
             {/* Mobile menu button */}
             <button
               onClick={() => setMobileOpen(true)}
@@ -102,12 +108,11 @@ export default function Header() {
             </button>
 
             {/* Logo */}
-            <a href="/" className="flex items-center gap-2.5 group">
-              <Logo compact className="transition-transform duration-300 group-hover:scale-[1.03]" />
-              <div className="leading-none">
-                <span className="block font-display text-2xl font-semibold text-berry-800">Jazelle</span>
-                <span className="block text-[0.7rem] uppercase tracking-[0.2em] text-blush-400 font-medium">Skin Haven</span>
-              </div>
+            <a href="/" className="flex items-center group py-0.5" aria-label="Jazelle Skin Haven Home">
+              <Logo
+                size="header"
+                className="transition-transform duration-300 group-hover:scale-[1.03] shrink-0 drop-shadow-xs"
+              />
             </a>
 
             {/* Desktop nav */}
@@ -217,7 +222,10 @@ export default function Header() {
                 (term) => (
                   <button
                     key={term}
-                    onClick={() => setSearchOpen(false)}
+                    onClick={() => {
+                      setSearchOpen(false);
+                      window.location.href = `/shop?search=${encodeURIComponent(term)}`;
+                    }}
                     className="badge-jazelle hover:bg-blush-200 transition-colors cursor-pointer"
                   >
                     {term}
@@ -238,8 +246,10 @@ export default function Header() {
           />
           <div className="absolute left-0 top-0 bottom-0 w-[85%] max-w-sm bg-cream-50 shadow-soft-xl animate-slide-in-right flex flex-col">
             {/* Header */}
-            <div className="flex items-center justify-between p-5 border-b border-blush-100">
-              <div className="flex items-center gap-2.5"><Logo compact /><div className="leading-none"><span className="block font-display text-xl font-semibold text-berry-800">Jazelle</span><span className="block text-[0.65rem] uppercase tracking-[0.2em] text-blush-400 font-medium">Skin Haven</span></div></div>
+            <div className="flex items-center justify-between p-4 sm:p-5 border-b border-blush-100">
+              <a href="/" onClick={() => setMobileOpen(false)} aria-label="Jazelle Skin Haven Home">
+                <Logo size="header" className="shrink-0 drop-shadow-xs" />
+              </a>
               <button
                 onClick={() => setMobileOpen(false)}
                 className="p-2 rounded-full text-berry-500 hover:bg-blush-50 transition-colors"

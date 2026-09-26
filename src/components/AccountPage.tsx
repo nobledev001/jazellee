@@ -126,10 +126,15 @@ function OrdersTab() {
 
   useEffect(() => {
     if (!user) return;
-    supabase.from('orders').select('*').order('created_at', { ascending: false }).then(({ data }) => {
-      setOrders((data as OrderRow[]) ?? []);
-      setLoading(false);
-    });
+    supabase
+      .from('orders')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false })
+      .then(({ data }) => {
+        setOrders((data as OrderRow[]) ?? []);
+        setLoading(false);
+      });
   }, [user]);
 
   if (loading) return <Card>Loading your orders...</Card>;
@@ -204,10 +209,15 @@ function AddressesTab() {
 
   const load = () => {
     if (!user) return;
-    supabase.from('addresses').select('*').order('created_at', { ascending: false }).then(({ data }) => {
-      setAddresses((data as AddressRow[]) ?? []);
-      setLoading(false);
-    });
+    supabase
+      .from('addresses')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false })
+      .then(({ data }) => {
+        setAddresses((data as AddressRow[]) ?? []);
+        setLoading(false);
+      });
   };
 
   useEffect(load, [user]);
@@ -321,8 +331,8 @@ function AddressForm({ address, onCancel, onSaved }: { address?: AddressRow; onC
 }
 
 function WishlistTab() {
-  const { wishlist, toggleWishlist } = useStore();
-  const products = wishlist.map(getProduct).filter(Boolean);
+  const { wishlist, toggleWishlist, getProduct: getStoreProduct } = useStore();
+  const products = wishlist.map((slug) => getStoreProduct(slug) || getProduct(slug)).filter(Boolean);
 
   if (products.length === 0) {
     return (

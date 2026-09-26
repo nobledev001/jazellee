@@ -90,7 +90,7 @@ export default function CartPage() {
               <div className="flex justify-between text-berry-500"><span>Delivery</span><span className="font-medium text-berry-700">{deliveryFee === 0 ? 'Free' : formatNaira(deliveryFee)}</span></div>
               <div className="border-t border-blush-100 pt-3 flex justify-between text-base font-bold text-berry-800"><span>Total</span><span>{formatNaira(total)}</span></div>
             </div>
-            <a href={user ? "/checkout" : "/login"} className="btn-primary mt-6 w-full">{user ? <>Checkout <ArrowRight className="h-4 w-4" /></> : <><Lock className="h-4 w-4" /> Sign in to checkout</>}</a>
+            <a href={user ? "/checkout" : "/login?redirect=/checkout"} className="btn-primary mt-6 w-full">{user ? <>Checkout <ArrowRight className="h-4 w-4" /></> : <><Lock className="h-4 w-4" /> Sign in to checkout</>}</a>
             {!user && <p className="mt-3 text-center text-xs text-blush-500">You need an account to complete your purchase.</p>}
             <p className="mt-3 text-center text-xs text-berry-400">All prices in Naira (&#8358;). Delivery across Nigeria.</p>
           </div>

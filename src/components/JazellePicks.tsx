@@ -1,11 +1,14 @@
 import { ArrowRight } from 'lucide-react';
 import { PRODUCTS } from '@/lib/catalog';
 import ProductCard from '@/components/ProductCard';
+import { useStore } from '@/store/StoreContext';
 
 const PICK_SLUGS = ['rose-glow-body-oil', 'soft-touch-face-cream', 'gentle-bloom-cleanser', 'honey-lip-souffle'];
 
 export default function JazellePicks() {
-  const picks = PICK_SLUGS.map((slug) => PRODUCTS.find((product) => product.slug === slug)).filter((product): product is NonNullable<typeof product> => Boolean(product));
+  const { products } = useStore();
+  const list = products && products.length > 0 ? products : PRODUCTS;
+  const picks = PICK_SLUGS.map((slug) => list.find((product) => product.slug === slug)).filter((product): product is NonNullable<typeof product> => Boolean(product));
 
   return (
     <section className="container-jazelle py-14 sm:py-20">

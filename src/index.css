@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600;700&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -118,7 +118,7 @@
   }
 
   .bg-gradient-blush {
-    background: linear-gradient(135deg, #FBE9EE 0%, #F9D9E1 50%, #FDF3EC 100%);
+    background: linear-gradient(135deg, #FCF3F7 0%, #F8DDE9 50%, #FDF3EC 100%);
   }
 
   .bg-gradient-cream {
@@ -126,11 +126,11 @@
   }
 
   .bg-gradient-rose-soft {
-    background: linear-gradient(135deg, #F9D9E1 0%, #F7C9D6 100%);
+    background: linear-gradient(135deg, #F8DDE9 0%, #F5BCD5 100%);
   }
 
   .text-gradient-blush {
-    background: linear-gradient(135deg, #D9789A 0%, #C15D80 100%);
+    background: linear-gradient(135deg, #D70F65 0%, #A20B4C 100%);
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;

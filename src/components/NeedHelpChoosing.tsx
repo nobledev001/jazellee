@@ -1,7 +1,17 @@
 import { MessageCircle, Heart } from 'lucide-react';
 import { getWhatsAppLink } from '@/lib/whatsapp';
+import { useSiteSettings } from '@/hooks/useSiteSettings';
 
 export default function NeedHelpChoosing() {
+  const { getSetting } = useSiteSettings();
+
+  const headline = getSetting('need_help_headline', 'Need help choosing?');
+  const subtext = getSetting(
+    'need_help_subtext',
+    "Not sure what your skin needs? Don't worry, we've got you. Chat with us and we'll help you find your perfect match."
+  );
+  const buttonLabel = getSetting('need_help_button', 'Chat With Jazelle');
+
   return (
     <section className="container-jazelle py-14 sm:py-20">
       <div className="relative overflow-hidden rounded-5xl bg-gradient-rose-soft px-6 py-12 sm:px-12 sm:py-16 text-center">
@@ -14,11 +24,10 @@ export default function NeedHelpChoosing() {
           </div>
 
           <h2 className="font-display text-3xl sm:text-4xl font-medium text-berry-800 mb-3 text-balance">
-            Need help choosing?
+            {headline}
           </h2>
           <p className="text-berry-500 text-base sm:text-lg mb-7 text-balance">
-            Not sure what your skin needs? Don't worry, we've got you.
-            Chat with us and we'll help you find your perfect match.
+            {subtext}
           </p>
 
           <a
@@ -28,7 +37,7 @@ export default function NeedHelpChoosing() {
             className="btn-primary"
           >
             <MessageCircle className="w-4 h-4" />
-            Chat With Jazelle
+            {buttonLabel}
           </a>
 
           <p className="mt-4 text-xs text-berry-400">

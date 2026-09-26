@@ -1,110 +1,201 @@
+import { useState, useEffect } from 'react';
 import { ArrowRight, Sparkles, Star } from 'lucide-react';
+import { useSiteSettings } from '@/hooks/useSiteSettings';
+
+interface HeroSlide {
+  image: string;
+  alt: string;
+  tagline?: string;
+}
+
+const HERO_SLIDES: HeroSlide[] = [
+  {
+    image: '/assets/images/hero_slide_1.jpg',
+    alt: 'Close-up of gentle hands applying velvety cream onto glowing, dewy skin',
+    tagline: 'Delicate Daily Rituals',
+  },
+  {
+    image: '/assets/images/hero_slide_2.jpg',
+    alt: 'Editorial frosted glass dropper bottles on textured linen with rose petals',
+    tagline: 'Clean, Thoughtful Formulas',
+  },
+  {
+    image: '/assets/images/hero_slide_3.jpg',
+    alt: 'Macro radiant bare skin texture with delicate water droplets and natural sheen',
+    tagline: 'Deep Hydration & Glow',
+  },
+  {
+    image: '/assets/images/hero_slide_4.jpg',
+    alt: 'Hand dispensing golden botanical serum from a glass dropper onto the palm',
+    tagline: 'Nourishing Botanical Elixirs',
+  },
+  {
+    image: '/assets/images/hero_slide_5.jpg',
+    alt: 'Whipped face cream swirl in an open ceramic jar on warm travertine stone',
+    tagline: 'Everyday Comfort',
+  },
+];
+
+const AVATARS = [
+  'https://images.pexels.com/photos/7321500/pexels-photo-7321500.jpeg?auto=compress&cs=tinysrgb&w=100&h=100&fit=crop',
+  'https://images.pexels.com/photos/7622877/pexels-photo-7622877.jpeg?auto=compress&cs=tinysrgb&w=100&h=100&fit=crop',
+  'https://images.pexels.com/photos/5468699/pexels-photo-5468699.jpeg?auto=compress&cs=tinysrgb&w=100&h=100&fit=crop',
+];
 
 export default function Hero() {
+  const [currentSlide, setCurrentSlide] = useState(0);
+  const { getSetting } = useSiteSettings();
+
+  const heroBadge = getSetting('hero_badge', 'Now delivering across Nigeria');
+  const heroHeadline = getSetting('hero_headline', 'Your little self-care haven');
+  const heroSubtitle = getSetting(
+    'hero_subtitle',
+    'Skincare, body care & little things that make you feel good. Thoughtfully picked for the modern Nigerian woman — soft, warm, and made for you.'
+  );
+  const ctaPrimaryLabel = getSetting('hero_cta_primary_label', 'Shop Now');
+  const ctaPrimaryLink = getSetting('hero_cta_primary_link', '/shop');
+  const ctaSecondaryLabel = getSetting('hero_cta_secondary_label', 'Explore Self-Care');
+  const ctaSecondaryLink = getSetting('hero_cta_secondary_link', '/categories/self-care');
+  const socialProofText = getSetting('hero_social_proof', 'Loved by 500+ women across Nigeria');
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentSlide((prev) => (prev + 1) % HERO_SLIDES.length);
+    }, 4500);
+
+    return () => clearInterval(timer);
+  }, []);
+
   return (
-    <section className="relative overflow-hidden bg-gradient-blush">
-      {/* Decorative blobs */}
-      <div className="absolute top-10 right-[-60px] w-72 h-72 rounded-full bg-blush-200/40 blur-3xl pointer-events-none" />
-      <div className="absolute bottom-[-40px] left-[-40px] w-56 h-56 rounded-full bg-cream-300/30 blur-3xl pointer-events-none" />
-
-      <div className="container-jazelle relative py-12 sm:py-16 lg:py-24">
-        <div className="grid lg:grid-cols-2 gap-10 lg:gap-16 items-center">
-          {/* Text content */}
-          <div className="order-2 lg:order-1 text-center lg:text-left animate-fade-in">
-            <div className="inline-flex items-center gap-2 mb-5">
-              <span className="badge-jazelle">
-                <Sparkles className="w-3 h-3" />
-                Now delivering across Nigeria
-              </span>
+    <section
+      className="relative w-full min-h-[580px] sm:min-h-[640px] lg:min-h-[700px] flex items-center overflow-hidden bg-berry-950"
+      aria-label="Hero Showcase"
+    >
+      {/* Background Slideshow with Smooth Cross-Fade */}
+      <div className="absolute inset-0 w-full h-full overflow-hidden select-none">
+        {HERO_SLIDES.map((slide, index) => {
+          const isActive = index === currentSlide;
+          return (
+            <div
+              key={index}
+              className={`absolute inset-0 w-full h-full transition-opacity duration-1000 ease-in-out ${
+                isActive ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'
+              }`}
+            >
+              <img
+                src={slide.image}
+                alt={slide.alt}
+                className={`w-full h-full object-cover object-center transition-transform duration-[5500ms] ease-out ${
+                  isActive ? 'scale-105' : 'scale-100'
+                }`}
+                loading={index === 0 ? 'eager' : 'lazy'}
+              />
             </div>
+          );
+        })}
+      </div>
 
-            <h1 className="font-display text-4xl sm:text-5xl lg:text-6xl font-medium text-berry-800 leading-[1.1] text-balance mb-4">
-              Your little{' '}
-              <span className="text-gradient-blush italic">self-care haven</span>
+      {/* Layer 1: Contrast Protection - Directional Gradient from Left/Center for Text Readability */}
+      <div className="absolute inset-0 z-10 bg-gradient-to-r from-berry-950/95 via-berry-950/75 to-berry-950/50 sm:from-berry-950/90 sm:via-berry-950/70 sm:to-berry-950/45" />
+
+      {/* Layer 2: Subtle Vertical Vignette for Top Nav & Bottom Carousel Controls */}
+      <div className="absolute inset-0 z-10 bg-gradient-to-t from-berry-950/85 via-transparent to-berry-950/40" />
+
+      {/* Layer 3: Warm Blush Glow Tint */}
+      <div className="absolute inset-0 z-10 bg-blush-950/20 mix-blend-multiply pointer-events-none" />
+
+      {/* Hero Foreground Content */}
+      <div className="container-jazelle relative z-20 py-16 sm:py-20 lg:py-28">
+        <div className="max-w-2xl text-left">
+          {/* Badge */}
+          <div className="inline-flex items-center gap-2 mb-4 sm:mb-6 animate-fade-in">
+            <span className="inline-flex items-center gap-2 rounded-full bg-white/15 backdrop-blur-md border border-white/25 px-3.5 py-1.5 text-xs sm:text-sm font-medium text-white shadow-soft">
+              <Sparkles className="w-3.5 h-3.5 text-blush-300 animate-pulse" />
+              {heroBadge}
+            </span>
+          </div>
+
+          {/* Headline & Subtitle in Blurred Glass Panel */}
+          <div className="bg-black/35 backdrop-blur-md rounded-3xl px-6 py-6 sm:px-8 sm:py-8 mb-8 sm:mb-10 inline-block">
+            {/* Main Headline */}
+            <h1 className="font-display text-4xl sm:text-5xl lg:text-6xl xl:text-7xl font-medium text-white leading-[1.1] sm:leading-[1.12] text-balance drop-shadow-sm mb-4">
+              {heroHeadline}
             </h1>
 
-            <p className="text-berry-500 text-base sm:text-lg leading-relaxed max-w-md mx-auto lg:mx-0 mb-8">
-              Skincare, body care & little things that make you feel good.
-              Thoughtfully picked for the modern Nigerian woman — soft, warm,
-              and made for you.
+            {/* Subtitle */}
+            <p className="text-white/90 text-base sm:text-lg lg:text-xl font-light leading-relaxed max-w-xl drop-shadow-xs">
+              {heroSubtitle}
             </p>
+          </div>
 
-            <div className="flex flex-col sm:flex-row gap-3 justify-center lg:justify-start">
-              <a href="/shop" className="btn-primary">
-                Shop Now
-                <ArrowRight className="w-4 h-4" />
-              </a>
-              <a href="/categories/self-care" className="btn-secondary">
-                Explore Self-Care
-              </a>
+          {/* Call-to-Action Buttons */}
+          <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 items-stretch sm:items-center">
+            <a
+              href={ctaPrimaryLink}
+              className="btn-primary !bg-blush-500 hover:!bg-blush-600 !text-white shadow-soft-lg px-8 py-3.5 text-sm sm:text-base font-semibold text-center group transition-all duration-300"
+            >
+              <span>{ctaPrimaryLabel}</span>
+              <ArrowRight className="w-4 h-4 transition-transform duration-300 group-hover:translate-x-1" />
+            </a>
+            <a
+              href={ctaSecondaryLink}
+              className="btn-secondary !bg-white/15 hover:!bg-white/25 !text-white !border-white/35 backdrop-blur-md px-7 py-3.5 text-sm sm:text-base font-semibold text-center transition-all duration-300"
+            >
+              {ctaSecondaryLabel}
+            </a>
+          </div>
+
+          {/* Social Proof: Loved by 500+ Women Badge */}
+          <div className="mt-8 sm:mt-10 inline-flex items-center gap-3.5 p-2 pr-4 sm:pr-5 rounded-full bg-black/25 backdrop-blur-md border border-white/20 shadow-soft">
+            <div className="flex -space-x-2">
+              {AVATARS.map((src, i) => (
+                <img
+                  key={i}
+                  src={src}
+                  alt=""
+                  className="w-8 h-8 sm:w-9 sm:h-9 rounded-full border-2 border-white/80 object-cover"
+                />
+              ))}
             </div>
-
-            {/* Social proof */}
-            <div className="mt-8 flex items-center gap-3 justify-center lg:justify-start">
-              <div className="flex -space-x-2">
-                {[
-                  'https://images.pexels.com/photos/7321500/pexels-photo-7321500.jpeg?auto=compress&cs=tinysrgb&w=80&h=80&fit=crop',
-                  'https://images.pexels.com/photos/7622877/pexels-photo-7622877.jpeg?auto=compress&cs=tinysrgb&w=80&h=80&fit=crop',
-                  'https://images.pexels.com/photos/5468699/pexels-photo-5468699.jpeg?auto=compress&cs=tinysrgb&w=80&h=80&fit=crop',
-                ].map((src, i) => (
-                  <img
+            <div className="text-left">
+              <div className="flex items-center gap-0.5">
+                {[...Array(5)].map((_, i) => (
+                  <Star
                     key={i}
-                    src={src}
-                    alt=""
-                    className="w-9 h-9 rounded-full border-2 border-cream-50 object-cover"
+                    className="w-3.5 h-3.5 fill-gold-400 stroke-gold-400"
                   />
                 ))}
               </div>
-              <div className="text-left">
-                <div className="flex items-center gap-0.5">
-                  {[...Array(5)].map((_, i) => (
-                    <Star
-                      key={i}
-                      className="w-3.5 h-3.5 fill-gold-400 stroke-gold-400"
-                    />
-                  ))}
-                </div>
-                <p className="text-xs text-berry-400 mt-0.5">
-                  Loved by 500+ women across Nigeria
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* Image */}
-          <div className="order-1 lg:order-2 relative animate-scale-in">
-            <div className="relative max-w-md mx-auto lg:max-w-none">
-              {/* Main image */}
-              <div className="relative rounded-5xl overflow-hidden shadow-soft-xl aspect-[4/5]">
-                <img
-                  src="https://images.pexels.com/photos/7321500/pexels-photo-7321500.jpeg?auto=compress&cs=tinysrgb&w=900"
-                  alt="A woman in a soft robe applying skincare, enjoying a self-care moment"
-                  className="w-full h-full object-cover"
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-berry-900/10 to-transparent" />
-              </div>
-
-              {/* Floating product card */}
-              <div className="absolute -bottom-4 -left-2 sm:-left-6 bg-cream-50 rounded-3xl shadow-soft-lg p-3 sm:p-4 flex items-center gap-3 max-w-[200px] animate-fade-in-down">
-                <img
-                  src="https://images.pexels.com/photos/4857799/pexels-photo-4857799.jpeg?auto=compress&cs=tinysrgb&w=120&h=120&fit=crop"
-                  alt="Bestseller"
-                  className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl object-cover flex-shrink-0"
-                />
-                <div>
-                  <p className="text-xs font-semibold text-berry-700">Bestseller</p>
-                  <p className="text-[0.7rem] text-berry-400">Glow Body Oil</p>
-                  <p className="text-sm font-bold text-blush-500 mt-0.5">&#8358;12,500</p>
-                </div>
-              </div>
-
-              {/* Floating heart badge */}
-              <div className="absolute -top-3 -right-2 sm:-right-4 w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-blush-500 text-white flex items-center justify-center shadow-soft-lg animate-bounce-soft">
-                <Sparkles className="w-5 h-5 sm:w-6 sm:h-6" />
-              </div>
+              <p className="text-xs text-white/90 font-medium mt-0.5 tracking-tight">
+                {socialProofText}
+              </p>
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Small Dot Indicators (Auto-rotation visual cue + clickable) */}
+      <div
+        className="absolute bottom-6 sm:bottom-8 left-0 right-0 z-20 flex justify-center items-center gap-2 sm:gap-2.5"
+        role="tablist"
+        aria-label="Slideshow indicators"
+      >
+        {HERO_SLIDES.map((slide, idx) => {
+          const isActive = idx === currentSlide;
+          return (
+            <button
+              key={idx}
+              type="button"
+              onClick={() => setCurrentSlide(idx)}
+              aria-label={`Go to slide ${idx + 1}: ${slide.tagline || slide.alt}`}
+              className={`transition-all duration-500 rounded-full cursor-pointer focus:outline-hidden focus:ring-2 focus:ring-blush-300 ${
+                isActive
+                  ? 'w-7 sm:w-8 h-2 sm:h-2.5 bg-blush-400 shadow-md ring-1 ring-white/50'
+                  : 'w-2 sm:w-2.5 h-2 sm:h-2.5 bg-white/40 hover:bg-white/75'
+              }`}
+            />
+          );
+        })}
       </div>
     </section>
   );

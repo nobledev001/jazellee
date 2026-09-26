@@ -1,4 +1,5 @@
-import { Heart, Sparkles, Check, ArrowRight } from 'lucide-react';
+import { Heart, Sparkles, ArrowRight } from 'lucide-react';
+import { useSiteSettings } from '@/hooks/useSiteSettings';
 
 const WHY_SHOP = [
   {
@@ -29,32 +30,45 @@ const WHY_SHOP = [
 ];
 
 export default function AboutPage() {
+  const { getSetting } = useSiteSettings();
+
+  const heroSubtitle = getSetting('about_hero_subtitle', 'Our Story');
+  const founderGreeting = getSetting(
+    'founder_greeting',
+    'Hi, I am Jazelle — and this is my little corner for you'
+  );
+  const founderIntro = getSetting(
+    'founder_intro',
+    'What started as a personal obsession with soft, happy skin became a business, then a pause, and now — a clearer, warmer version of the dream. This is why I created this little space for you.'
+  );
+  const founderImageUrl = getSetting(
+    'founder_image_url',
+    'https://images.pexels.com/photos/8076238/pexels-photo-8076238.jpeg?auto=compress&cs=tinysrgb&w=800'
+  );
+
   return (
     <main className="bg-cream-50">
       {/* Hero */}
       <div className="relative overflow-hidden bg-gradient-blush">
-        <div className="absolute inset-0 bg-[url('/assets/images/image%20copy.png')] bg-[length:200px_200px] opacity-[0.03] mix-blend-multiply pointer-events-none" />
+        <div className="absolute inset-0 bg-[url('/assets/images/jazelle_wordmark_transparent.png')] bg-[length:280px_112px] opacity-[0.04] pointer-events-none" />
         <div className="relative container-jazelle py-14 sm:py-20">
           <div className="grid items-center gap-8 lg:grid-cols-2 lg:gap-16">
             <div>
               <div className="inline-flex items-center gap-2 mb-3">
                 <Sparkles className="w-4 h-4 text-blush-400" />
-                <span className="section-subtitle">Our Story</span>
+                <span className="section-subtitle">{heroSubtitle}</span>
               </div>
               <h1 className="font-display text-4xl font-medium text-berry-800 sm:text-5xl leading-tight text-balance">
-                Hi, I am Jazelle — and this is my little corner for you
+                {founderGreeting}
               </h1>
               <p className="mt-4 text-berry-500 text-base sm:text-lg leading-relaxed">
-                What started as a personal obsession with soft, happy skin
-                became a business, then a pause, and now — a clearer, warmer
-                version of the dream. This is why I created this little space
-                for you.
+                {founderIntro}
               </p>
             </div>
             <div className="relative">
               <div className="aspect-[4/5] overflow-hidden rounded-5xl shadow-soft-lg">
                 <img
-                  src="https://images.pexels.com/photos/8076238/pexels-photo-8076238.jpeg?auto=compress&cs=tinysrgb&w=800"
+                  src={founderImageUrl}
                   alt="Jazelle, founder of Jazelle Skin Haven"
                   className="h-full w-full object-cover"
                 />
@@ -92,7 +106,7 @@ export default function AboutPage() {
 
       {/* Why Shop Jazelle */}
       <div className="relative overflow-hidden bg-gradient-cream py-14 sm:py-20">
-        <div className="absolute inset-0 bg-[url('/assets/images/image%20copy.png')] bg-[length:220px_220px] opacity-[0.025] mix-blend-multiply pointer-events-none" />
+        <div className="absolute inset-0 bg-[url('/assets/images/jazelle_wordmark_transparent.png')] bg-[length:300px_120px] opacity-[0.035] pointer-events-none" />
         <div className="relative container-jazelle">
           <div className="text-center mb-10">
             <span className="section-subtitle">What Makes Us Different</span>

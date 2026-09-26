@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import { useAdminAuth } from './AdminAuth';
+import { AdminAuthProvider, useAdminAuth } from './AdminAuth';
 import AdminLogin from './pages/AdminLogin';
 import AdminLayout from './AdminLayout';
 import AdminDashboard from './pages/AdminDashboard';
@@ -25,14 +25,17 @@ function parseHash(): AdminRoute {
   return (valid.includes(hash as AdminRoute) ? hash : 'dashboard') as AdminRoute;
 }
 
-export default function AdminApp() {
+function AdminAppContent() {
   const { loading, isAdmin } = useAdminAuth();
   const [route, setRoute] = useState<AdminRoute>(() => parseHash());
 
   if (loading) {
     return (
-      <div className="flex h-screen items-center justify-center bg-gray-50">
-        <div className="text-gray-400 text-sm">Loading…</div>
+      <div className="flex h-screen items-center justify-center bg-gray-900">
+        <div className="flex items-center gap-3 text-pink-400 text-sm">
+          <div className="w-5 h-5 border-2 border-pink-500 border-t-transparent rounded-full animate-spin" />
+          <span>Loading admin dashboard…</span>
+        </div>
       </div>
     );
   }
@@ -60,5 +63,13 @@ export default function AdminApp() {
     <AdminLayout route={route} navigate={navigate}>
       {pages[route]}
     </AdminLayout>
+  );
+}
+
+export default function AdminApp() {
+  return (
+    <AdminAuthProvider>
+      <AdminAppContent />
+    </AdminAuthProvider>
   );
 }

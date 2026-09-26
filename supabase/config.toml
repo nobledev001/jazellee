@@ -1,0 +1,15 @@
+[auth.rate_limit]
+# Stricter production security rate limits to prevent brute-force attacks and abuse:
+# Confirmed enabled with strict thresholds
+email_limit = 30
+token_verifications = 30
+signups = 20
+anonymous_users = 20
+
+[auth.email.template.recovery]
+subject = "Your Jazelle Skin Haven Verification Code"
+content_path = "./supabase/email-templates/reset-password.html"
+
+[auth.email.template.confirmation]
+subject = "Verify your Jazelle Skin Haven Account"
+content_path = "./supabase/email-templates/confirmation.html"

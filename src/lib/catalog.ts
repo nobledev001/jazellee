@@ -8,8 +8,10 @@ export interface Review {
 }
 
 export interface Product {
+  id?: string;
   slug: string;
   name: string;
+  brand?: string;
   category: Category;
   price: number;
   image: string;
@@ -24,13 +26,14 @@ export interface Product {
   label?: ProductLabel;
   rating: number;
   reviews: Review[];
+  isActive?: boolean;
 }
 
 const image = (id: string, size = 'w=900') => `https://images.pexels.com/photos/${id}/pexels-photo-${id}.jpeg?auto=compress&cs=tinysrgb&${size}`;
 
 export const PRODUCTS: Product[] = [
   {
-    slug: 'gentle-bloom-cleanser', name: 'Gentle Bloom Cleanser', category: 'Skincare', price: 7500,
+    slug: 'gentle-bloom-cleanser', name: 'Gentle Bloom Cleanser', brand: 'JAZELLE', category: 'Skincare', price: 7500,
     image: image('39392892'), gallery: [image('39392892'), image('4857799'), image('7818170')],
     description: 'A soft, no-drama cleanse for mornings, evenings, and every little reset in between.',
     whatItDoes: 'Lifts away daily build-up while leaving skin comfortable, fresh, and never tight.',
@@ -40,7 +43,7 @@ export const PRODUCTS: Product[] = [
     reviews: [{ name: 'Amaka O.', rating: 5, text: 'My face feels clean but still soft after using this. It is now my everyday cleanser.' }, { name: 'Tolu A.', rating: 5, text: 'Simple, gentle, and does exactly what I need.' }],
   },
   {
-    slug: 'sun-kissed-sunscreen', name: 'Sun-Kissed Daily SPF', category: 'Skincare', price: 11500,
+    slug: 'sun-kissed-sunscreen', name: 'Sun-Kissed Daily SPF', brand: 'TIAM', category: 'Skincare', price: 11500,
     image: image('39452544'), gallery: [image('39452544'), image('39281882'), image('39400892')],
     description: 'Your easy final morning step for sunny Abuja days, errands, and everything in between.',
     whatItDoes: 'Helps protect your skin from everyday sun exposure with a comfortable, lightweight finish.',
@@ -50,7 +53,7 @@ export const PRODUCTS: Product[] = [
     reviews: [{ name: 'Zainab M.', rating: 5, text: 'No heavy white cast and it sits so nicely under my makeup.' }, { name: 'Dami E.', rating: 5, text: 'Finally a sunscreen I remember to use every day.' }],
   },
   {
-    slug: 'soft-touch-face-cream', name: 'Soft Touch Face Cream', category: 'Skincare', price: 9800,
+    slug: 'soft-touch-face-cream', name: 'Soft Touch Face Cream', brand: 'BALANCE', category: 'Skincare', price: 9800,
     image: image('6690233'), gallery: [image('6690233'), image('7818170'), image('36339062')],
     description: 'A comforting cream for that soft, bouncy, well-rested feeling your skin loves.',
     whatItDoes: 'Adds lasting comfort and moisture without feeling heavy or sticky.',
@@ -60,7 +63,7 @@ export const PRODUCTS: Product[] = [
     reviews: [{ name: 'Chioma R.', rating: 5, text: 'My skin looks rested and feels so soft. A little goes a long way.' }],
   },
   {
-    slug: 'rose-glow-body-oil', name: 'Rose Glow Body Oil', category: 'Body Care', price: 12500,
+    slug: 'rose-glow-body-oil', name: 'Rose Glow Body Oil', brand: 'JAZELLE', category: 'Body Care', price: 12500,
     image: image('4857799'), gallery: [image('4857799'), image('7818170'), image('5816408')],
     description: 'A silky body oil for post-shower glow, soft limbs, and a little extra main-character energy.',
     whatItDoes: 'Seals in moisture and leaves skin smooth with a subtle, feel-good glow.',
@@ -70,7 +73,7 @@ export const PRODUCTS: Product[] = [
     reviews: [{ name: 'Nneka I.', rating: 5, text: 'The glow is gorgeous without being greasy. I get compliments every time.' }, { name: 'Feyi K.', rating: 5, text: 'It makes my evening shower feel so much more special.' }],
   },
   {
-    slug: 'smooth-day-body-lotion', name: 'Smooth Day Body Lotion', category: 'Body Care', price: 8900,
+    slug: 'smooth-day-body-lotion', name: 'Smooth Day Body Lotion', brand: 'CERAVE', category: 'Body Care', price: 8900,
     image: image('33525723'), gallery: [image('33525723'), image('6690233'), image('5816408')],
     description: 'A plush everyday lotion that keeps your skin feeling soft from morning to night.',
     whatItDoes: 'Comforts dry-feeling skin and helps keep your glow going all day.',
@@ -80,7 +83,7 @@ export const PRODUCTS: Product[] = [
     reviews: [{ name: 'Mimi A.', rating: 5, text: 'It absorbs quickly and my legs stay soft all day.' }],
   },
   {
-    slug: 'honey-lip-souffle', name: 'Honey Lip Souffle', category: 'Self-Care', price: 5200,
+    slug: 'honey-lip-souffle', name: 'Honey Lip Souffle', brand: 'COSRX', category: 'Self-Care', price: 5200,
     image: image('8558526'), gallery: [image('8558526'), image('31552021'), image('28959838')],
     description: 'A buttery little lip treat for soft, happy lips and handbag-sized joy.',
     whatItDoes: 'Comforts dry lips with a smooth, glossy veil of moisture.',
@@ -90,7 +93,7 @@ export const PRODUCTS: Product[] = [
     reviews: [{ name: 'Lara S.', rating: 5, text: 'So cute and actually keeps my lips soft. I keep one everywhere.' }],
   },
   {
-    slug: 'calm-night-bath-salts', name: 'Calm Night Bath Salts', category: 'Self-Care', price: 6800,
+    slug: 'calm-night-bath-salts', name: 'Calm Night Bath Salts', brand: 'JAZELLE', category: 'Self-Care', price: 6800,
     image: image('36457029'), gallery: [image('36457029'), image('6732262'), image('5816408')],
     description: 'A slow-evening ritual in a pouch — for warm water, deep breaths, and doing less.',
     whatItDoes: 'Turns an ordinary bath or foot soak into a soothing, aromatic pause.',
@@ -100,7 +103,7 @@ export const PRODUCTS: Product[] = [
     reviews: [{ name: 'Bola T.', rating: 5, text: 'This is my Sunday reset in a pouch. Smells beautiful.' }],
   },
   {
-    slug: 'silk-shave-cream', name: 'Silk & Smooth Shave Cream', category: 'Grooming', price: 7200,
+    slug: 'silk-shave-cream', name: 'Silk & Smooth Shave Cream', brand: 'BALANCE', category: 'Grooming', price: 7200,
     image: image('30487796'), gallery: [image('30487796'), image('39392892'), image('28959838')],
     description: 'A creamy glide for an easier, softer-feeling shave — no rushing required.',
     whatItDoes: 'Helps your razor move comfortably while leaving skin feeling cared for.',
@@ -110,7 +113,7 @@ export const PRODUCTS: Product[] = [
     reviews: [{ name: 'Ifeoma C.', rating: 5, text: 'My shave feels much less rushed and my skin is happy afterwards.' }],
   },
   {
-    slug: 'fresh-start-underarm-care', name: 'Fresh Start Underarm Care', category: 'Grooming', price: 6100,
+    slug: 'fresh-start-underarm-care', name: 'Fresh Start Underarm Care', brand: 'TIAM', category: 'Grooming', price: 6100,
     image: image('8558490'), gallery: [image('8558490'), image('30487796'), image('37274628')],
     description: 'A fresh, gentle step for feeling comfortable, clean, and ready for your day.',
     whatItDoes: 'Helps keep underarms feeling fresh while fitting easily into your routine.',
@@ -128,6 +131,75 @@ export const CATEGORIES: Array<{ name: Category; description: string; image: str
   { name: 'Grooming', description: 'Simple, gentle essentials for feeling put together.', image: image('30487796') },
 ];
 
+export function dbProductToProduct(row: Record<string, unknown>): Product {
+  const stock = typeof row.stock === 'number' ? row.stock : 15;
+  const availability: Product['availability'] =
+    stock > 10 ? 'In stock' : stock > 0 ? 'Limited stock' : 'Back in stock';
+
+  const gallery = Array.isArray(row.gallery) && row.gallery.length > 0
+    ? (row.gallery as string[])
+    : row.image
+      ? [row.image as string]
+      : ['https://images.unsplash.com/photo-1556228720-195a672e8a03?w=800&auto=format&fit=crop&q=80'];
+
+  let features: string[] = [];
+  if (Array.isArray(row.features)) {
+    features = row.features as string[];
+  } else if (typeof row.features === 'string') {
+    features = (row.features as string)
+      .split(/[\n,]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+
+  const categoryStr = String(row.category || 'Skincare');
+  const validCategory: Category = (['Skincare', 'Body Care', 'Self-Care', 'Grooming'] as const).includes(categoryStr as Category)
+    ? (categoryStr as Category)
+    : 'Skincare';
+
+  const labelVal = row.label && row.label !== 'none' ? String(row.label) : undefined;
+
+  return {
+    id: typeof row.id === 'string' ? row.id : undefined,
+    slug: String(row.slug || ''),
+    name: String(row.name || 'Untitled Product'),
+    brand: typeof row.brand === 'string' && row.brand.trim() ? row.brand.trim().toUpperCase() : 'JAZELLE',
+    category: validCategory,
+    price: Number(row.price) || 0,
+    image: String(row.image || gallery[0] || 'https://images.unsplash.com/photo-1556228720-195a672e8a03?w=800&auto=format&fit=crop&q=80'),
+    gallery,
+    description: String(row.description || ''),
+    whatItDoes: String(row.what_it_does || row.whatItDoes || row.description || ''),
+    whoItsFor: String(row.who_its_for || row.whoItsFor || 'All melanin-rich & sensitive skin types'),
+    howToUse: String(row.how_to_use || row.howToUse || 'Apply gently onto clean damp skin morning and night.'),
+    features,
+    size: String(row.size || '100 ml'),
+    availability,
+    label: labelVal as ProductLabel | undefined,
+    rating: typeof row.rating === 'number' ? row.rating : 4.9,
+    reviews: Array.isArray(row.reviews) ? (row.reviews as Review[]) : [],
+    isActive: row.is_active !== false,
+  };
+}
+
+export function getStoredProducts(): Product[] {
+  try {
+    const raw = typeof window !== 'undefined' ? localStorage.getItem('jazelle_db_products') : null;
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed.map(dbProductToProduct);
+      }
+    }
+  } catch {
+    // fallback
+  }
+  return PRODUCTS;
+}
+
 export function getProduct(slug: string): Product | undefined {
+  const stored = getStoredProducts();
+  const foundInStored = stored.find((product) => product.slug === slug);
+  if (foundInStored) return foundInStored;
   return PRODUCTS.find((product) => product.slug === slug);
 }
