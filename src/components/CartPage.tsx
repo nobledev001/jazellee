@@ -1,19 +1,44 @@
-import { Minus, Plus, Trash2, ShoppingBag, ArrowRight, Heart, Lock } from 'lucide-react';
+import { useState } from 'react';
+import { Minus, Plus, Trash2, ShoppingBag, ArrowRight, Heart, Lock, Ticket, X, CheckCircle2, AlertCircle } from 'lucide-react';
 import { useStore, getCartProducts } from '@/store/StoreContext';
 import { formatNaira } from '@/lib/format';
 import { useAuth } from '@/lib/auth';
 
-const DELIVERY_FEE = 3500;
-const FREE_DELIVERY_THRESHOLD = 40000;
-
 export default function CartPage() {
-  const { cart, updateCartQuantity, removeFromCart, cartSubtotal } = useStore();
+  const {
+    cart,
+    updateCartQuantity,
+    removeFromCart,
+    cartSubtotal,
+    deliveryFee,
+    remainingForFreeDelivery,
+    appliedCoupon,
+    discountAmount,
+    cartTotal,
+    applyCoupon,
+    removeCoupon,
+  } = useStore();
   const { user } = useAuth();
   const items = getCartProducts(cart);
 
-  const deliveryFee = cartSubtotal >= FREE_DELIVERY_THRESHOLD || cartSubtotal === 0 ? 0 : DELIVERY_FEE;
-  const total = cartSubtotal + deliveryFee;
-  const remainingForFreeDelivery = Math.max(0, FREE_DELIVERY_THRESHOLD - cartSubtotal);
+  const [promoInput, setPromoInput] = useState('');
+  const [applyingPromo, setApplyingPromo] = useState(false);
+  const [promoFeedback, setPromoFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const handleApplyPromo = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!promoInput.trim()) return;
+    setApplyingPromo(true);
+    setPromoFeedback(null);
+    const res = await applyCoupon(promoInput);
+    setApplyingPromo(false);
+    if (res.success) {
+      setPromoInput('');
+      setPromoFeedback({ type: 'success', text: res.message });
+    } else {
+      setPromoFeedback({ type: 'error', text: res.message });
+    }
+  };
 
   if (items.length === 0) {
     return (
@@ -35,10 +60,15 @@ export default function CartPage() {
       <h1 className="section-title">Your Cart</h1>
       <p className="mt-2 text-sm text-berry-400">{items.length} {items.length === 1 ? 'item' : 'items'} ready for checkout.</p>
 
-      {remainingForFreeDelivery > 0 && (
+      {remainingForFreeDelivery > 0 ? (
         <div className="mt-4 flex items-center gap-2 rounded-3xl bg-blush-50 px-5 py-3 text-sm text-berry-500">
           <Heart className="h-4 w-4 flex-shrink-0 text-blush-400" />
           You are {formatNaira(remainingForFreeDelivery)} away from free delivery!
+        </div>
+      ) : (
+        <div className="mt-4 flex items-center gap-2 rounded-3xl bg-sage-50 px-5 py-3 text-sm text-sage-700 font-medium">
+          <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-sage-600" />
+          Your order qualifies for free delivery across Nigeria!
         </div>
       )}
 
@@ -85,12 +115,106 @@ export default function CartPage() {
         <div className="lg:col-span-1">
           <div className="sticky top-24 rounded-4xl bg-white p-6 shadow-soft">
             <h2 className="font-display text-lg font-medium text-berry-800">Order Summary</h2>
-            <div className="mt-4 space-y-3 text-sm">
-              <div className="flex justify-between text-berry-500"><span>Subtotal</span><span className="font-medium text-berry-700">{formatNaira(cartSubtotal)}</span></div>
-              <div className="flex justify-between text-berry-500"><span>Delivery</span><span className="font-medium text-berry-700">{deliveryFee === 0 ? 'Free' : formatNaira(deliveryFee)}</span></div>
-              <div className="border-t border-blush-100 pt-3 flex justify-between text-base font-bold text-berry-800"><span>Total</span><span>{formatNaira(total)}</span></div>
+
+            {/* Promo Code Input */}
+            <div className="mt-4 pt-4 border-t border-blush-100">
+              <label className="block text-xs font-semibold text-berry-700 mb-2">
+                Promo Code
+              </label>
+
+              {appliedCoupon ? (
+                <div className="flex items-center justify-between gap-2 rounded-2xl bg-sage-50 border border-sage-200 px-3.5 py-2.5">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Ticket className="h-4 w-4 text-sage-600 shrink-0" />
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold text-sage-800 font-mono">{appliedCoupon.code}</p>
+                      <p className="text-[11px] text-sage-600 truncate">
+                        {appliedCoupon.discount_type === 'percentage'
+                          ? `${appliedCoupon.discount_value}% off applied`
+                          : `${formatNaira(appliedCoupon.discount_value)} off applied`}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      removeCoupon();
+                      setPromoFeedback(null);
+                    }}
+                    className="p-1 rounded-full text-sage-600 hover:bg-sage-100 transition-colors cursor-pointer"
+                    aria-label="Remove promo code"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              ) : (
+                <form onSubmit={handleApplyPromo} className="flex gap-2">
+                  <input
+                    type="text"
+                    value={promoInput}
+                    onChange={(e) => setPromoInput(e.target.value)}
+                    placeholder="Enter code (e.g. GLOW10)"
+                    className="input-jazelle !py-2 !px-3.5 text-xs uppercase flex-1"
+                  />
+                  <button
+                    type="submit"
+                    disabled={applyingPromo || !promoInput.trim()}
+                    className="rounded-full bg-berry-800 px-4 py-2 text-xs font-semibold text-white hover:bg-berry-700 transition-colors disabled:opacity-50 cursor-pointer shrink-0"
+                  >
+                    {applyingPromo ? 'Checking…' : 'Apply'}
+                  </button>
+                </form>
+              )}
+
+              {promoFeedback && (
+                <div
+                  className={`mt-2 flex items-center gap-1.5 text-xs ${
+                    promoFeedback.type === 'success' ? 'text-sage-700' : 'text-blush-600'
+                  }`}
+                >
+                  {promoFeedback.type === 'success' ? (
+                    <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                  ) : (
+                    <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                  )}
+                  <span>{promoFeedback.text}</span>
+                </div>
+              )}
             </div>
-            <a href={user ? "/checkout" : "/login?redirect=/checkout"} className="btn-primary mt-6 w-full">{user ? <>Checkout <ArrowRight className="h-4 w-4" /></> : <><Lock className="h-4 w-4" /> Sign in to checkout</>}</a>
+
+            <div className="mt-4 space-y-3 border-t border-blush-100 pt-4 text-sm">
+              <div className="flex justify-between text-berry-500">
+                <span>Subtotal</span>
+                <span className="font-medium text-berry-700">{formatNaira(cartSubtotal)}</span>
+              </div>
+              {appliedCoupon && discountAmount > 0 && (
+                <div className="flex justify-between text-sage-700 font-medium">
+                  <span>Discount ({appliedCoupon.code})</span>
+                  <span>-{formatNaira(discountAmount)}</span>
+                </div>
+              )}
+              <div className="flex justify-between text-berry-500">
+                <span>Delivery</span>
+                <span className="font-medium text-berry-700">
+                  {deliveryFee === 0 ? (
+                    <span className="text-sage-600 font-semibold">Free</span>
+                  ) : (
+                    formatNaira(deliveryFee)
+                  )}
+                </span>
+              </div>
+              <div className="border-t border-blush-100 pt-3 flex justify-between text-base font-bold text-berry-800">
+                <span>Total</span>
+                <span>{formatNaira(cartTotal)}</span>
+              </div>
+            </div>
+            <a href={user ? "/checkout" : "/login?redirect=/checkout"} className="btn-primary mt-6 w-full">
+              {user ? (
+                <>Checkout <ArrowRight className="h-4 w-4" /></>
+              ) : (
+                <><Lock className="h-4 w-4" /> Sign in to checkout</>
+              )}
+            </a>
             {!user && <p className="mt-3 text-center text-xs text-blush-500">You need an account to complete your purchase.</p>}
             <p className="mt-3 text-center text-xs text-berry-400">All prices in Naira (&#8358;). Delivery across Nigeria.</p>
           </div>

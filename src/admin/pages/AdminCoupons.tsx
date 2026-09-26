@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Ticket, Plus } from 'lucide-react';
+import { useEffect, useState, useCallback } from 'react';
+import { Ticket, Plus, Trash2 } from 'lucide-react';
 import { supabase, type DbCoupon } from '../supabase';
 
 export default function AdminCoupons() {
@@ -10,21 +10,40 @@ export default function AdminCoupons() {
   const [newDesc, setNewDesc] = useState('');
   const [newVal, setNewVal] = useState(10);
   const [newType, setNewType] = useState('percentage');
+  const [newLimit, setNewLimit] = useState(100);
+  const [newExpiry, setNewExpiry] = useState('');
 
-  const loadCoupons = () => {
-    supabase
-      .from('coupons')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .then(({ data }) => {
-        if (data) setCoupons(data as DbCoupon[]);
-        setLoading(false);
-      });
-  };
+  const loadCoupons = useCallback(async () => {
+    try {
+      const { data } = await supabase
+        .from('coupons')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (data) setCoupons(data as DbCoupon[]);
+    } catch (err) {
+      console.warn('Error loading coupons:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     loadCoupons();
-  }, []);
+
+    const handleSync = () => {
+      loadCoupons();
+    };
+
+    window.addEventListener('jazelle_coupons_updated', handleSync);
+    window.addEventListener('jazelle_db_change', handleSync);
+    window.addEventListener('storage', handleSync);
+
+    return () => {
+      window.removeEventListener('jazelle_coupons_updated', handleSync);
+      window.removeEventListener('jazelle_db_change', handleSync);
+      window.removeEventListener('storage', handleSync);
+    };
+  }, [loadCoupons]);
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -34,18 +53,27 @@ export default function AdminCoupons() {
       description: newDesc,
       discount_type: newType,
       discount_value: newVal,
-      usage_limit: 100,
+      usage_limit: newLimit > 0 ? newLimit : null,
+      expiry_date: newExpiry ? new Date(newExpiry).toISOString() : null,
       used_count: 0,
       is_active: true,
     });
     setNewCode('');
     setNewDesc('');
+    setNewLimit(100);
+    setNewExpiry('');
     setShowAdd(false);
     loadCoupons();
   };
 
   const toggleActive = async (coupon: DbCoupon) => {
     await supabase.from('coupons').update({ is_active: !coupon.is_active }).eq('id', coupon.id);
+    loadCoupons();
+  };
+
+  const deleteCoupon = async (id: string) => {
+    if (!confirm('Delete this coupon code permanently?')) return;
+    await supabase.from('coupons').delete().eq('id', id);
     loadCoupons();
   };
 
@@ -67,7 +95,7 @@ export default function AdminCoupons() {
       {showAdd && (
         <form onSubmit={handleAdd} className="rounded-xl border border-pink-100 bg-pink-50/50 p-4 sm:p-5 space-y-4">
           <h3 className="text-sm font-semibold text-gray-900">Create New Coupon</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">Code</label>
               <input
@@ -98,6 +126,25 @@ export default function AdminCoupons() {
                 onChange={(e) => setNewVal(Number(e.target.value))}
                 required
                 min={1}
+                className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm bg-white min-h-[42px]"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Usage Limit (0 = Unlimited)</label>
+              <input
+                type="number"
+                value={newLimit}
+                onChange={(e) => setNewLimit(Number(e.target.value))}
+                min={0}
+                className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm bg-white min-h-[42px]"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Expiry Date (Optional)</label>
+              <input
+                type="date"
+                value={newExpiry}
+                onChange={(e) => setNewExpiry(e.target.value)}
                 className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm bg-white min-h-[42px]"
               />
             </div>
@@ -163,11 +210,17 @@ export default function AdminCoupons() {
                     </span>
                   </div>
 
+                  {coupon.expiry_date && (
+                    <p className="text-[11px] text-gray-400">
+                      Expires: {new Date(coupon.expiry_date).toLocaleDateString('en-NG')}
+                    </p>
+                  )}
+
                   {coupon.description && (
                     <p className="text-xs text-gray-500">{coupon.description}</p>
                   )}
 
-                  <div className="pt-2 border-t border-gray-100 flex justify-end">
+                  <div className="pt-2 border-t border-gray-100 flex justify-end gap-2">
                     <button
                       onClick={() => toggleActive(coupon)}
                       className={`rounded-lg px-3.5 py-1.5 text-xs font-semibold border transition-colors cursor-pointer min-h-[36px] ${
@@ -177,6 +230,13 @@ export default function AdminCoupons() {
                       }`}
                     >
                       {coupon.is_active ? 'Disable Coupon' : 'Enable Coupon'}
+                    </button>
+                    <button
+                      onClick={() => deleteCoupon(coupon.id)}
+                      title="Delete Coupon"
+                      className="rounded-lg p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 border border-gray-200 transition-colors cursor-pointer min-h-[36px]"
+                    >
+                      <Trash2 className="h-4 w-4" />
                     </button>
                   </div>
                 </div>
@@ -192,8 +252,9 @@ export default function AdminCoupons() {
                     <th className="px-6 py-3 whitespace-nowrap">Discount</th>
                     <th className="px-6 py-3">Description</th>
                     <th className="px-6 py-3 whitespace-nowrap">Redemptions</th>
+                    <th className="px-6 py-3 whitespace-nowrap">Expiry</th>
                     <th className="px-6 py-3 whitespace-nowrap">Status</th>
-                    <th className="px-6 py-3 text-right whitespace-nowrap">Toggle</th>
+                    <th className="px-6 py-3 text-right whitespace-nowrap">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -212,6 +273,9 @@ export default function AdminCoupons() {
                       <td className="px-6 py-4 text-xs whitespace-nowrap">
                         {coupon.used_count || 0} / {coupon.usage_limit || '∞'}
                       </td>
+                      <td className="px-6 py-4 text-xs text-gray-500 whitespace-nowrap">
+                        {coupon.expiry_date ? new Date(coupon.expiry_date).toLocaleDateString('en-NG') : 'No expiry'}
+                      </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium ${
                           coupon.is_active ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-500'
@@ -220,14 +284,23 @@ export default function AdminCoupons() {
                         </span>
                       </td>
                       <td className="px-6 py-4 text-right whitespace-nowrap">
-                        <button
-                          onClick={() => toggleActive(coupon)}
-                          className={`rounded px-2.5 py-1 text-xs font-medium cursor-pointer ${
-                            coupon.is_active ? 'text-amber-600 hover:bg-amber-50' : 'text-emerald-600 hover:bg-emerald-50'
-                          }`}
-                        >
-                          {coupon.is_active ? 'Disable' : 'Enable'}
-                        </button>
+                        <div className="inline-flex items-center gap-1">
+                          <button
+                            onClick={() => toggleActive(coupon)}
+                            className={`rounded px-2.5 py-1 text-xs font-medium cursor-pointer ${
+                              coupon.is_active ? 'text-amber-600 hover:bg-amber-50' : 'text-emerald-600 hover:bg-emerald-50'
+                            }`}
+                          >
+                            {coupon.is_active ? 'Disable' : 'Enable'}
+                          </button>
+                          <button
+                            onClick={() => deleteCoupon(coupon.id)}
+                            title="Delete Coupon"
+                            className="rounded p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}

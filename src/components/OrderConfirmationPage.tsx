@@ -4,14 +4,24 @@ import { formatNaira } from '@/lib/format';
 import { useRouter } from '@/router';
 import { supabase } from '@/lib/auth';
 
-interface OrderItem { slug: string; name: string; price: number; quantity: number; image: string; }
+interface OrderItem {
+  slug: string;
+  name: string;
+  price: number;
+  quantity: number;
+  image: string;
+}
+
 interface Order {
   order_number: string;
   items: OrderItem[];
   subtotal: number;
   delivery_fee: number;
+  discount_amount?: number;
+  coupon_code?: string | null;
   total: number;
   status: string;
+  payment_status?: string;
   customer_name: string;
   customer_email: string;
   delivery_address: string;
@@ -22,27 +32,89 @@ interface Order {
 
 export default function OrderConfirmationPage() {
   const { search } = useRouter();
-  const orderNumber = search.get('id') ?? '';
+  const orderNumber = (search.get('id') ?? '').trim();
+  const contactParam = (search.get('email') ?? search.get('contact') ?? '').trim();
   const [order, setOrder] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!orderNumber) { setLoading(false); return; }
-    supabase.from('orders').select('*').eq('order_number', orderNumber).maybeSingle().then(({ data }) => {
-      setOrder(data as Order | null);
+    if (!orderNumber) {
       setLoading(false);
-    });
-  }, [orderNumber]);
+      return;
+    }
+
+    let isMounted = true;
+
+    async function loadOrder() {
+      setLoading(true);
+      setErrorMsg(null);
+      try {
+        // Call the SECURITY DEFINER track_order RPC so guest order confirmation works under RLS
+        // without granting public SELECT access on the orders table.
+        let rpcResponse = await supabase.rpc('track_order', {
+          p_order_number: orderNumber,
+          ...(contactParam ? { p_contact: contactParam } : {}),
+        });
+
+        // If the 2-arg signature required p_contact on an older DB function definition, retry with p_contact: ''
+        if (rpcResponse.error && !contactParam) {
+          rpcResponse = await supabase.rpc('track_order', {
+            p_order_number: orderNumber,
+            p_contact: '',
+          });
+        }
+
+        if (!isMounted) return;
+
+        if (rpcResponse.error) {
+          console.error('[OrderConfirmationPage] track_order RPC error:', rpcResponse.error);
+          setErrorMsg(rpcResponse.error.message);
+          setOrder(null);
+        } else if (rpcResponse.data) {
+          const raw = Array.isArray(rpcResponse.data) ? rpcResponse.data[0] : rpcResponse.data;
+          if (raw && typeof raw === 'object' && 'order_number' in raw) {
+            setOrder(raw as Order);
+          } else {
+            setOrder(null);
+          }
+        } else {
+          setOrder(null);
+        }
+      } catch (err: unknown) {
+        if (!isMounted) return;
+        const msg = err instanceof Error ? err.message : 'Unable to load order confirmation.';
+        setErrorMsg(msg);
+        setOrder(null);
+      } finally {
+        if (isMounted) setLoading(false);
+      }
+    }
+
+    void loadOrder();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [orderNumber, contactParam]);
 
   if (loading) {
-    return <main className="container-jazelle py-16 text-center"><p className="text-berry-400">Loading...</p></main>;
+    return (
+      <main className="container-jazelle py-16 text-center">
+        <p className="text-berry-400">Loading your order details...</p>
+      </main>
+    );
   }
 
   if (!order) {
     return (
       <main className="container-jazelle py-16 text-center">
         <h1 className="section-title">Order not found</h1>
-        <p className="mt-2 text-berry-400">We could not find this order. Check your order ID or contact us.</p>
+        <p className="mt-2 text-berry-400">
+          {errorMsg
+            ? `Database error loading order: ${errorMsg}`
+            : 'We could not find this order. Check your order ID or contact us.'}
+        </p>
         <a href="/shop" className="btn-primary mt-6">Back to Shop</a>
       </main>
     );
@@ -55,8 +127,13 @@ export default function OrderConfirmationPage() {
           <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-sage-100 animate-scale-in">
             <CheckCircle className="h-9 w-9 text-sage-600" />
           </div>
-          <h1 className="font-display text-3xl font-medium text-berry-800 sm:text-4xl">Thank you, {order.customer_name.split(' ')[0]}!</h1>
-          <p className="mt-2 text-berry-500">Your order has been placed successfully. A confirmation email is on its way to {order.customer_email}.</p>
+          <h1 className="font-display text-3xl font-medium text-berry-800 sm:text-4xl">
+            Thank you, {(order.customer_name || 'Guest').split(' ')[0]}!
+          </h1>
+          <p className="mt-2 text-berry-500">
+            Your order has been placed successfully. A confirmation email is on its way
+            {order.customer_email ? ` to ${order.customer_email}` : ''}.
+          </p>
           <div className="mt-4 inline-flex items-center gap-2 rounded-full bg-blush-50 px-5 py-2.5">
             <span className="text-sm text-berry-400">Order ID:</span>
             <span className="text-sm font-bold text-berry-800">{order.order_number}</span>
@@ -66,7 +143,7 @@ export default function OrderConfirmationPage() {
         <div className="mt-8 rounded-4xl bg-white p-6 shadow-soft sm:p-8">
           <h2 className="font-display text-lg font-medium text-berry-800">Order details</h2>
           <div className="mt-4 space-y-3">
-            {order.items.map((item) => (
+            {(order.items || []).map((item) => (
               <div key={item.slug} className="flex items-center gap-3">
                 <img src={item.image} alt={item.name} className="h-14 w-14 rounded-xl object-cover" />
                 <div className="flex-1">
@@ -78,9 +155,26 @@ export default function OrderConfirmationPage() {
             ))}
           </div>
           <div className="mt-4 space-y-2 border-t border-blush-100 pt-4 text-sm">
-            <div className="flex justify-between text-berry-500"><span>Subtotal</span><span className="font-medium text-berry-700">{formatNaira(order.subtotal)}</span></div>
-            <div className="flex justify-between text-berry-500"><span>Delivery</span><span className="font-medium text-berry-700">{order.delivery_fee === 0 ? 'Free' : formatNaira(order.delivery_fee)}</span></div>
-            <div className="border-t border-blush-100 pt-2 flex justify-between text-base font-bold text-berry-800"><span>Total</span><span>{formatNaira(order.total)}</span></div>
+            <div className="flex justify-between text-berry-500">
+              <span>Subtotal</span>
+              <span className="font-medium text-berry-700">{formatNaira(order.subtotal)}</span>
+            </div>
+            {order.discount_amount && order.discount_amount > 0 ? (
+              <div className="flex justify-between text-sage-700 font-medium">
+                <span>Discount {order.coupon_code ? `(${order.coupon_code})` : ''}</span>
+                <span>-{formatNaira(order.discount_amount)}</span>
+              </div>
+            ) : null}
+            <div className="flex justify-between text-berry-500">
+              <span>Delivery</span>
+              <span className="font-medium text-berry-700">
+                {order.delivery_fee === 0 ? 'Free' : formatNaira(order.delivery_fee)}
+              </span>
+            </div>
+            <div className="border-t border-blush-100 pt-2 flex justify-between text-base font-bold text-berry-800">
+              <span>Total</span>
+              <span>{formatNaira(order.total)}</span>
+            </div>
           </div>
         </div>
 
@@ -98,23 +192,45 @@ export default function OrderConfirmationPage() {
           <h2 className="font-display text-lg font-medium text-berry-800">What happens next?</h2>
           <div className="mt-4 space-y-4">
             <div className="flex items-start gap-3">
-              <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-white text-blush-500 shadow-soft"><Mail className="h-4 w-4" /></span>
-              <div><p className="text-sm font-semibold text-berry-700">Confirmation email sent</p><p className="text-xs text-berry-400">Check your inbox for your order summary and receipt.</p></div>
+              <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-white text-blush-500 shadow-soft">
+                <Mail className="h-4 w-4" />
+              </span>
+              <div>
+                <p className="text-sm font-semibold text-berry-700">Confirmation email sent</p>
+                <p className="text-xs text-berry-400">Check your inbox for your order summary and receipt.</p>
+              </div>
             </div>
             <div className="flex items-start gap-3">
-              <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-white text-blush-500 shadow-soft"><Clock className="h-4 w-4" /></span>
-              <div><p className="text-sm font-semibold text-berry-700">Processing</p><p className="text-xs text-berry-400">We are getting your order ready. You will get an email when it ships.</p></div>
+              <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-white text-blush-500 shadow-soft">
+                <Clock className="h-4 w-4" />
+              </span>
+              <div>
+                <p className="text-sm font-semibold text-berry-700">Processing</p>
+                <p className="text-xs text-berry-400">We are getting your order ready. You will get an email when it ships.</p>
+              </div>
             </div>
             <div className="flex items-start gap-3">
-              <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-white text-blush-500 shadow-soft"><Truck className="h-4 w-4" /></span>
-              <div><p className="text-sm font-semibold text-berry-700">On the way</p><p className="text-xs text-berry-400">Once shipped, you will receive a tracking link to follow your delivery.</p></div>
+              <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-white text-blush-500 shadow-soft">
+                <Truck className="h-4 w-4" />
+              </span>
+              <div>
+                <p className="text-sm font-semibold text-berry-700">On the way</p>
+                <p className="text-xs text-berry-400">Once shipped, you will receive a tracking link to follow your delivery.</p>
+              </div>
             </div>
           </div>
         </div>
 
         <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center">
-          <a href={`/track-order?id=${order.order_number}`} className="btn-primary"><Package className="h-4 w-4" /> Track Your Order</a>
-          <a href="/shop" className="btn-secondary">Continue Shopping <ArrowRight className="h-4 w-4" /></a>
+          <a
+            href={`/track-order?id=${encodeURIComponent(order.order_number)}${order.customer_email ? `&contact=${encodeURIComponent(order.customer_email)}` : ''}`}
+            className="btn-primary"
+          >
+            <Package className="h-4 w-4" /> Track Your Order
+          </a>
+          <a href="/shop" className="btn-secondary">
+            Continue Shopping <ArrowRight className="h-4 w-4" />
+          </a>
         </div>
       </div>
     </main>

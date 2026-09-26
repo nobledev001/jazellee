@@ -76,60 +76,33 @@ export async function recordCustomerProfile(profile: {
 }) {
   const cleanEmail = profile.email?.trim().toLowerCase();
   if (!cleanEmail) return;
-  const displayName = profile.fullName?.trim() || cleanEmail.split('@')[0];
-  const role = cleanEmail === 'admin@jazelle.com' ? 'owner' : 'customer';
+  const fullName = profile.fullName?.trim() || cleanEmail.split('@')[0];
+  const role = cleanEmail === 'admin@jazelle.com' ? 'admin' : 'customer';
+
+  const isUUID =
+    Boolean(profile.id) &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(profile.id!);
+
+  if (!isUUID || !profile.id) {
+    return;
+  }
+
   const newProfile = {
-    id: profile.id || `usr-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    id: profile.id,
     email: cleanEmail,
-    display_name: displayName,
+    full_name: fullName,
     role,
     phone: profile.phone || '',
-    created_at: profile.created_at || new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
 
   try {
-    const raw = localStorage.getItem('jazelle_registered_customers') || '[]';
-    const list: (typeof newProfile)[] = JSON.parse(raw);
-    const existingIdx = list.findIndex((c) => c.email.toLowerCase() === cleanEmail);
-    if (existingIdx >= 0) {
-      list[existingIdx] = { ...list[existingIdx], ...newProfile };
-    } else {
-      list.unshift(newProfile);
+    const { error } = await supabase.from('profiles').upsert(newProfile, { onConflict: 'id' });
+    if (error) {
+      console.error('[Auth] Supabase profiles upsert failed:', error.message);
     }
-    localStorage.setItem('jazelle_registered_customers', JSON.stringify(list));
-
-    const rawDb = localStorage.getItem('jazelle_db_profiles') || '[]';
-    const dbList: (typeof newProfile)[] = JSON.parse(rawDb);
-    const dbIdx = dbList.findIndex((c) => c.email.toLowerCase() === cleanEmail);
-    if (dbIdx >= 0) {
-      dbList[dbIdx] = { ...dbList[dbIdx], ...newProfile };
-    } else {
-      dbList.unshift(newProfile);
-    }
-    localStorage.setItem('jazelle_db_profiles', JSON.stringify(dbList));
-  } catch {
-    // quota
-  }
-
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('jazelle_customer_registered', { detail: newProfile }));
-  }
-
-  const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(newProfile.id);
-  if (isUUID) {
-    try {
-      await rawSupabaseClient.from('profiles').upsert({
-        id: newProfile.id,
-        email: newProfile.email,
-        display_name: newProfile.display_name,
-        role: newProfile.role,
-        phone: newProfile.phone,
-        updated_at: newProfile.updated_at,
-      });
-    } catch {
-      // silent cloud sync
-    }
+  } catch (err) {
+    console.error('[Auth] Error upserting customer profile:', err);
   }
 
   return newProfile;

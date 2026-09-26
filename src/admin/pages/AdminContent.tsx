@@ -75,13 +75,15 @@ export default function AdminContent() {
     try {
       const { data, error } = await supabase.from('site_settings').select('*');
       if (error) throw error;
+      const map: Record<string, string> = {};
       if (data && data.length > 0) {
-        const map: Record<string, string> = {};
         data.forEach((row: { key: string; value: string }) => {
           if (row.key && row.value !== undefined) {
             map[row.key] = String(row.value);
           }
         });
+      }
+      if (Object.keys(map).length > 0) {
         setSettings((prev) => ({ ...prev, ...map }));
       }
     } catch (err) {
@@ -145,18 +147,13 @@ export default function AdminContent() {
       const { error } = await supabase.from('site_settings').upsert(rows, { onConflict: 'key' });
       if (error) throw error;
 
-      // Update local storage cache & notify storefront listeners
-      try {
-        localStorage.setItem('jazelle_site_settings_cache', JSON.stringify(settings));
-      } catch {
-        // ignore quota
-      }
       window.dispatchEvent(new CustomEvent('jazelle_settings_updated', { detail: settings }));
 
       showToast('All website content updated successfully!');
-    } catch (err) {
+    } catch (err: unknown) {
       console.error('Error saving settings:', err);
-      alert('Failed to save settings. Please try again.');
+      const errMsg = err instanceof Error ? err.message : 'Failed to save settings.';
+      showToast(`Database error saving settings: ${errMsg}`);
     } finally {
       setSavingSettings(false);
     }

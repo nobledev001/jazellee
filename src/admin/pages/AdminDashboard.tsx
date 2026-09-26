@@ -78,18 +78,7 @@ export default function AdminDashboard() {
           }
         });
       }
-      try {
-        const rawReg = localStorage.getItem('jazelle_registered_customers');
-        if (rawReg) {
-          const list = JSON.parse(rawReg);
-          list.forEach((p: { email?: string }) => {
-            if (p.email && p.email.toLowerCase() !== 'admin@jazelle.com') customerEmails.add(p.email.toLowerCase());
-          });
-        }
-      } catch {
-        // ignore
-      }
-      setCustomerCount(Math.max(customerEmails.size, 4));
+      setCustomerCount(customerEmails.size);
 
       setLastSynced(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
     } catch (err) {

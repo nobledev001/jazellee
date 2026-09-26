@@ -789,9 +789,27 @@ export default function AdminOrders() {
               </div>
             </div>
 
-            <div className="border-t pt-3 flex items-center justify-between text-sm">
-              <span className="text-gray-500">Total ({selectedOrder.payment_method})</span>
-              <span className="text-lg font-bold text-gray-900">₦{selectedOrder.total.toLocaleString()}</span>
+            <div className="border-t pt-3 space-y-1.5 text-sm">
+              {selectedOrder.discount_amount && selectedOrder.discount_amount > 0 ? (
+                <>
+                  <div className="flex items-center justify-between text-xs text-gray-500">
+                    <span>Subtotal</span>
+                    <span>₦{(selectedOrder.subtotal || 0).toLocaleString()}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-xs text-emerald-700 font-medium">
+                    <span>Promo Discount {selectedOrder.coupon_code ? `(${selectedOrder.coupon_code})` : ''}</span>
+                    <span>-₦{selectedOrder.discount_amount.toLocaleString()}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-xs text-gray-500">
+                    <span>Delivery Fee</span>
+                    <span>{(selectedOrder.delivery_fee || 0) === 0 ? 'Free' : `₦${(selectedOrder.delivery_fee || 0).toLocaleString()}`}</span>
+                  </div>
+                </>
+              ) : null}
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-gray-500">Total ({selectedOrder.payment_method})</span>
+                <span className="text-lg font-bold text-gray-900">₦{selectedOrder.total.toLocaleString()}</span>
+              </div>
             </div>
           </div>
         </div>

@@ -131,7 +131,7 @@ export async function decreaseProductStock(
 
       // Update in Supabase
       if (match.id) {
-        await supabase
+        const { error: updateErr } = await supabase
           .from('products')
           .update({
             stock: newStock,
@@ -139,8 +139,12 @@ export async function decreaseProductStock(
             updated_at: new Date().toISOString(),
           })
           .eq('id', match.id);
+        if (updateErr) {
+          console.error(`[Stock] Failed to decrement stock in Supabase for product ${match.slug}:`, updateErr.message);
+          continue;
+        }
       } else if (match.slug) {
-        await supabase
+        const { error: updateErr } = await supabase
           .from('products')
           .update({
             stock: newStock,
@@ -148,6 +152,10 @@ export async function decreaseProductStock(
             updated_at: new Date().toISOString(),
           })
           .eq('slug', match.slug);
+        if (updateErr) {
+          console.error(`[Stock] Failed to decrement stock in Supabase for product ${match.slug}:`, updateErr.message);
+          continue;
+        }
       }
 
       result.updated.push({ slug: match.slug, oldStock: currentStock, newStock });
@@ -161,29 +169,7 @@ export async function decreaseProductStock(
       }
     }
 
-    // 3. Update local storage storefront cache immediately
-    try {
-      const localKey = 'jazelle_db_products';
-      const rawStored = localStorage.getItem(localKey);
-      if (rawStored) {
-        const stored: ProductRecord[] = JSON.parse(rawStored);
-        if (Array.isArray(stored) && stored.length > 0) {
-          const updatedLocal = stored.map((p) => {
-            const upd = result.updated.find((u) => u.slug === p.slug);
-            if (upd) {
-              const avail = upd.newStock > 10 ? 'In stock' : upd.newStock > 0 ? 'Limited stock' : 'Back in stock';
-              return { ...p, stock: upd.newStock, availability: avail };
-            }
-            return p;
-          });
-          localStorage.setItem(localKey, JSON.stringify(updatedLocal));
-        }
-      }
-    } catch {
-      // ignore
-    }
-
-    // 4. Emit event so any storefront components refresh
+    // Emit event so any storefront components refresh from Supabase
     if (typeof window !== 'undefined') {
       window.dispatchEvent(
         new CustomEvent('jazelle_stock_decreased', {

@@ -127,10 +127,10 @@ DROP POLICY IF EXISTS "Allow public coupon selection" ON public.coupons;
 DROP POLICY IF EXISTS "Allow public coupon insert" ON public.coupons;
 DROP POLICY IF EXISTS "Allow public coupon update" ON public.coupons;
 
--- Public can only read active coupons for coupon code validation; Admin sees all
+-- Remove direct client SELECT * access; storefront validates via SECURITY DEFINER RPC validate_coupon(p_code text)
 CREATE POLICY "coupons_select_policy" ON public.coupons FOR SELECT
-  TO anon, authenticated
-  USING (is_active = true OR public.is_admin());
+  TO authenticated
+  USING (public.is_admin());
 
 -- Mutations strictly admin only
 CREATE POLICY "coupons_insert_policy" ON public.coupons FOR INSERT
@@ -164,7 +164,10 @@ BEGIN
 
     CREATE POLICY "product_reviews_insert" ON public.product_reviews FOR INSERT
       TO authenticated
-      WITH CHECK (auth.uid() = user_id OR public.is_admin());
+      WITH CHECK (
+        (is_approved = false AND (user_id IS NULL OR auth.uid() = user_id))
+        OR public.is_admin()
+      );
 
     CREATE POLICY "product_reviews_update" ON public.product_reviews FOR UPDATE
       TO authenticated
@@ -187,7 +190,10 @@ BEGIN
 
     CREATE POLICY "reviews_insert" ON public.reviews FOR INSERT
       TO authenticated
-      WITH CHECK (auth.uid() = user_id OR public.is_admin());
+      WITH CHECK (
+        (is_approved = false AND (user_id IS NULL OR auth.uid() = user_id))
+        OR public.is_admin()
+      );
 
     CREATE POLICY "reviews_update" ON public.reviews FOR UPDATE
       TO authenticated

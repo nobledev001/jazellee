@@ -42,8 +42,9 @@ BEGIN
 END;
 $$;
 
--- Grant execution to authenticated & anon roles (wrapped safely with security definer)
-GRANT EXECUTE ON FUNCTION public.claim_order_stock_decrement(text, text) TO anon, authenticated;
+-- Restrict execution strictly to service_role (called only by server-side payment verification / webhook)
+REVOKE EXECUTE ON FUNCTION public.claim_order_stock_decrement(text, text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.claim_order_stock_decrement(text, text) TO service_role;
 
 -- 4. Server-side Admin Login Rate Limiting Table
 CREATE TABLE IF NOT EXISTS public.admin_login_attempts (

@@ -35,7 +35,63 @@ function checkRateLimit(key: string, limit = 10, windowMs = 60000): { allowed: b
   return { allowed: true, remaining: limit - bucket.count, resetInSec: Math.ceil((bucket.resetAt - now) / 1000) };
 }
 
-// Clean up expired rate limit buckets every 5 minutes
+const DEFAULT_DELIVERY_FEE = 3500;
+const DEFAULT_FREE_DELIVERY_THRESHOLD = 35000;
+
+function getSupabaseConfig() {
+  const supabaseUrl = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').trim();
+  const supabaseServiceKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  const supabaseAnonKey = (process.env.VITE_SUPABASE_ANON_KEY || '').trim();
+  return {
+    supabaseUrl,
+    supabaseKey: supabaseServiceKey || supabaseAnonKey,
+    hasServiceRole: Boolean(supabaseServiceKey),
+  };
+}
+
+async function checkDatabaseRateLimit(
+  key: string,
+  limit = 10,
+  windowSeconds = 60
+): Promise<{ allowed: boolean; remaining: number; resetInSec: number; enforcedBy: string }> {
+  const { supabaseUrl, supabaseKey } = getSupabaseConfig();
+  if (supabaseUrl && supabaseKey) {
+    try {
+      const resp = await fetch(`${supabaseUrl}/rest/v1/rpc/check_and_increment_rate_limit`, {
+        method: 'POST',
+        headers: {
+          apikey: supabaseKey,
+          Authorization: `Bearer ${supabaseKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          p_key: key,
+          p_max_requests: limit,
+          p_window_seconds: windowSeconds,
+        }),
+      });
+      if (resp.ok) {
+        const data = (await resp.json()) as {
+          allowed?: boolean;
+          remaining?: number;
+          retry_after?: number;
+        } | null;
+        if (data && typeof data.allowed === 'boolean') {
+          return {
+            allowed: data.allowed,
+            remaining: Number(data.remaining ?? 0),
+            resetInSec: Number(data.retry_after || windowSeconds),
+            enforcedBy: 'database',
+          };
+        }
+      }
+    } catch {
+      // Fallback to local memory bucket if DB RPC not yet applied
+    }
+  }
+  const mem = checkRateLimit(key, limit, windowSeconds * 1000);
+  return { ...mem, enforcedBy: 'memory_fallback' };
+}
 setInterval(() => {
   const now = Date.now();
   for (const [k, v] of rateLimitBuckets.entries()) {
@@ -87,25 +143,16 @@ async function startServer() {
   });
 
   // Secure Paystack Verification API (Called from client post-payment)
-  app.post('/api/verify-paystack', async (req, res) => {
+  app.post(['/api/verify-paystack', '/api/paystack/verify'], async (req, res) => {
     try {
-      // 1. Rate Limiting: max 10 requests per minute per client IP
-      const clientIp = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown');
-      const ipLimit = checkRateLimit(`verify_ip_${clientIp}`, 10, 60000);
-      if (!ipLimit.allowed) {
-        res.setHeader('Retry-After', String(ipLimit.resetInSec));
-        return res.status(429).json({
-          verified: false,
-          status: 'rate_limited',
-          error: 'Rate limit exceeded: Too many verification requests. Please wait a minute before retrying.',
-          retryAfterSeconds: ipLimit.resetInSec,
-        });
-      }
+      const clientIp = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown')
+        .split(',')[0]
+        .trim();
 
-      const { reference, expectedAmount } = req.body || {};
+      const { reference, orderNumber, contact } = req.body || {};
+      const rawRef = reference || orderNumber;
 
-      // 2. Strict Input Validation
-      if (!reference || typeof reference !== 'string') {
+      if (!rawRef || typeof rawRef !== 'string') {
         return res.status(400).json({
           verified: false,
           error: 'Transaction reference is required and must be a string',
@@ -113,7 +160,7 @@ async function startServer() {
         });
       }
 
-      const cleanRef = reference.trim();
+      const cleanRef = rawRef.trim();
       if (cleanRef.length < 4 || cleanRef.length > 128 || !/^[a-zA-Z0-9_\-.:/]+$/.test(cleanRef)) {
         return res.status(400).json({
           verified: false,
@@ -122,23 +169,273 @@ async function startServer() {
         });
       }
 
-      // Max 5 attempts per reference
-      const refLimit = checkRateLimit(`verify_ref_${cleanRef}`, 5, 60000);
+      // 1. Database-backed Rate Limiting: Max 5 attempts per 60s per reference, 15 per 60s per IP
+      const refLimit = await checkDatabaseRateLimit(`verify_paystack_ref:${cleanRef}`, 5, 60);
       if (!refLimit.allowed) {
         res.setHeader('Retry-After', String(refLimit.resetInSec));
         return res.status(429).json({
           verified: false,
           status: 'rate_limited',
+          enforcedBy: refLimit.enforcedBy,
           error: `Too many verification attempts for reference "${cleanRef}". Please wait before retrying.`,
+          message: `Too many verification attempts for reference "${cleanRef}". Please wait ${refLimit.resetInSec} seconds before retrying.`,
           retryAfterSeconds: refLimit.resetInSec,
         });
       }
 
-      if (expectedAmount !== undefined && (typeof expectedAmount !== 'number' || !Number.isFinite(expectedAmount) || expectedAmount <= 0)) {
+      const ipLimit = await checkDatabaseRateLimit(`verify_paystack_ip:${clientIp}`, 15, 60);
+      if (!ipLimit.allowed) {
+        res.setHeader('Retry-After', String(ipLimit.resetInSec));
+        return res.status(429).json({
+          verified: false,
+          status: 'rate_limited',
+          enforcedBy: ipLimit.enforcedBy,
+          error: 'Rate limit exceeded: Too many verification requests. Please wait a minute before retrying.',
+          message: 'Rate limit exceeded: Too many verification requests. Please wait a minute before retrying.',
+          retryAfterSeconds: ipLimit.resetInSec,
+        });
+      }
+
+      const { supabaseUrl, supabaseKey, hasServiceRole } = getSupabaseConfig();
+      if (!supabaseUrl || !supabaseKey) {
+        return res.status(500).json({
+          verified: false,
+          status: 'config_missing',
+          message: 'Supabase URL or key is missing on server.',
+        });
+      }
+
+      // 2. Look up the actual order in Supabase by reference (order_number)
+      let orderRow: Record<string, unknown> | null = null;
+      if (hasServiceRole) {
+        const ordResp = await fetch(
+          `${supabaseUrl}/rest/v1/orders?order_number=eq.${encodeURIComponent(cleanRef)}&select=*`,
+          {
+            headers: {
+              apikey: supabaseKey,
+              Authorization: `Bearer ${supabaseKey}`,
+            },
+          }
+        );
+        if (ordResp.ok) {
+          const rows = (await ordResp.json()) as Array<Record<string, unknown>>;
+          if (Array.isArray(rows) && rows.length > 0) {
+            orderRow = rows[0];
+          }
+        }
+      }
+
+      if (!orderRow) {
+        // Fallback to track_order RPC if service_role is not in local env
+        const trackResp = await fetch(`${supabaseUrl}/rest/v1/rpc/track_order`, {
+          method: 'POST',
+          headers: {
+            apikey: supabaseKey,
+            Authorization: `Bearer ${supabaseKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            p_order_number: cleanRef,
+            p_contact: typeof contact === 'string' ? contact : '',
+          }),
+        });
+        if (trackResp.ok) {
+          const tracked = await trackResp.json();
+          if (tracked && typeof tracked === 'object' && !Array.isArray(tracked)) {
+            orderRow = tracked as Record<string, unknown>;
+          } else if (Array.isArray(tracked) && tracked.length > 0) {
+            orderRow = tracked[0] as Record<string, unknown>;
+          }
+        }
+      }
+
+      if (!orderRow) {
+        return res.status(404).json({
+          verified: false,
+          status: 'order_not_found',
+          message: `Order "${cleanRef}" was not found in the database.`,
+        });
+      }
+
+      // 3. Recalculate true expected total server-side from public.products, public.coupons, and public.site_settings
+      const orderItems = Array.isArray(orderRow.items)
+        ? (orderRow.items as Array<{ id?: string; slug?: string; name?: string; quantity?: number }>)
+        : [];
+      if (orderItems.length === 0) {
         return res.status(400).json({
           verified: false,
-          error: 'Invalid expectedAmount parameter',
-          message: 'expectedAmount must be a positive finite number',
+          status: 'invalid_order_items',
+          message: 'Order contains no line items.',
+        });
+      }
+
+      const prodResp = await fetch(`${supabaseUrl}/rest/v1/products?select=id,slug,name,price,stock`, {
+        headers: {
+          apikey: supabaseKey,
+          Authorization: `Bearer ${supabaseKey}`,
+        },
+      });
+      const dbProducts = prodResp.ok
+        ? ((await prodResp.json()) as Array<{ id?: string; slug?: string; name?: string; price: number; stock?: number }>)
+        : [];
+
+      if (!Array.isArray(dbProducts) || dbProducts.length === 0) {
+        return res.status(500).json({
+          verified: false,
+          status: 'catalog_lookup_failed',
+          message: 'Unable to load product catalog from database for server-side price calculation.',
+        });
+      }
+
+      let serverSubtotal = 0;
+      for (const item of orderItems) {
+        const qty = Math.floor(Number(item.quantity) || 0);
+        if (qty <= 0) {
+          return res.status(400).json({
+            verified: false,
+            status: 'invalid_item_quantity',
+            message: `Invalid item quantity for "${item.name || item.slug}".`,
+          });
+        }
+
+        const matchedProduct = dbProducts.find(
+          (p) => (item.slug && p.slug === item.slug) || (item.id && p.id === item.id)
+        );
+        if (!matchedProduct) {
+          return res.status(400).json({
+            verified: false,
+            status: 'unknown_product',
+            message: `Product "${item.slug || item.name}" does not exist in the catalog.`,
+          });
+        }
+        serverSubtotal += Number(matchedProduct.price) * qty;
+      }
+
+      // Re-validate coupon server-side if attached
+      let serverDiscountAmount = 0;
+      const rawCouponCode = orderRow.coupon_code ? String(orderRow.coupon_code).trim().toUpperCase() : '';
+
+      if (rawCouponCode) {
+        let couponValid = false;
+        let discountType = 'percentage';
+        let discountValue = 0;
+        let couponFailureReason = `Security Check Failed: Promo code "${rawCouponCode}" is invalid, expired, or has reached its usage limit.`;
+
+        if (hasServiceRole) {
+          const coupResp = await fetch(
+            `${supabaseUrl}/rest/v1/coupons?code=ilike.${encodeURIComponent(rawCouponCode)}&select=*`,
+            {
+              headers: {
+                apikey: supabaseKey,
+                Authorization: `Bearer ${supabaseKey}`,
+              },
+            }
+          );
+          if (coupResp.ok) {
+            const coupRows = (await coupResp.json()) as Array<Record<string, unknown>>;
+            const couponRow = coupRows?.[0];
+            if (couponRow && couponRow.is_active === true) {
+              const notExpired =
+                !couponRow.expiry_date || new Date(String(couponRow.expiry_date)).getTime() >= Date.now();
+              const usageLimit =
+                couponRow.usage_limit !== null && couponRow.usage_limit !== undefined
+                  ? Number(couponRow.usage_limit)
+                  : null;
+              const usedCount = Number(couponRow.used_count || 0);
+              const underLimit = usageLimit === null || usageLimit <= 0 || usedCount < usageLimit;
+              if (notExpired && underLimit) {
+                couponValid = true;
+                discountType = String(couponRow.discount_type || 'percentage');
+                discountValue = Number(couponRow.discount_value || 0);
+              }
+            }
+          }
+        } else {
+          // Validate via SECURITY DEFINER RPC validate_coupon(p_code)
+          const rpcResp = await fetch(`${supabaseUrl}/rest/v1/rpc/validate_coupon`, {
+            method: 'POST',
+            headers: {
+              apikey: supabaseKey,
+              Authorization: `Bearer ${supabaseKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ p_code: rawCouponCode }),
+          });
+          if (rpcResp.ok) {
+            const rpcResult = (await rpcResp.json()) as {
+              valid?: boolean;
+              discount_type?: string;
+              discount_value?: number;
+              message?: string;
+            } | null;
+            if (rpcResult && rpcResult.valid === true) {
+              couponValid = true;
+              discountType = String(rpcResult.discount_type || 'percentage');
+              discountValue = Number(rpcResult.discount_value || 0);
+            } else if (rpcResult?.message) {
+              couponFailureReason = `Security Check Failed: ${rpcResult.message}`;
+            }
+          }
+        }
+
+        if (!couponValid) {
+          return res.status(400).json({
+            verified: false,
+            status: 'invalid_coupon',
+            message: couponFailureReason,
+          });
+        }
+
+        if (discountType === 'percentage') {
+          serverDiscountAmount = Math.min(
+            serverSubtotal,
+            Math.round((serverSubtotal * discountValue) / 100)
+          );
+        } else {
+          serverDiscountAmount = Math.min(serverSubtotal, Math.max(0, Math.round(discountValue)));
+        }
+      }
+
+      // Fetch free_delivery_threshold from site_settings
+      const settingsResp = await fetch(
+        `${supabaseUrl}/rest/v1/site_settings?key=eq.free_delivery_threshold&select=value`,
+        {
+          headers: {
+            apikey: supabaseKey,
+            Authorization: `Bearer ${supabaseKey}`,
+          },
+        }
+      );
+      const settingsRows = settingsResp.ok
+        ? ((await settingsResp.json()) as Array<{ value?: string }>)
+        : [];
+      const parsedThreshold = settingsRows?.[0]?.value ? Number(settingsRows[0].value) : NaN;
+      const freeDeliveryThreshold =
+        Number.isFinite(parsedThreshold) && parsedThreshold >= 0
+          ? parsedThreshold
+          : DEFAULT_FREE_DELIVERY_THRESHOLD;
+
+      const serverDeliveryFee =
+        serverSubtotal === 0 || serverSubtotal >= freeDeliveryThreshold ? 0 : DEFAULT_DELIVERY_FEE;
+      const serverExpectedTotalNaira = Math.max(0, serverSubtotal - serverDiscountAmount) + serverDeliveryFee;
+      const serverExpectedKobo = Math.round(serverExpectedTotalNaira * 100);
+
+      // Detect if client tampered with order discount_amount or total before checkout
+      const clientOrderDiscount = Math.round(Number(orderRow.discount_amount || 0));
+      const clientOrderTotalNaira = Math.round(Number(orderRow.total || 0));
+
+      if (
+        Math.abs(clientOrderDiscount - serverDiscountAmount) > 1 ||
+        Math.abs(clientOrderTotalNaira - serverExpectedTotalNaira) > 1
+      ) {
+        return res.status(400).json({
+          verified: false,
+          status: 'amount_mismatch',
+          message: `Security Verification Rejected: Tampered discount or order total detected. Client submitted discount ₦${clientOrderDiscount.toLocaleString()} (total ₦${clientOrderTotalNaira.toLocaleString()}), but server calculated discount ₦${serverDiscountAmount.toLocaleString()} (true expected total ₦${serverExpectedTotalNaira.toLocaleString()}).`,
+          serverExpectedTotalNaira,
+          serverDiscountAmount,
+          clientOrderTotalNaira,
+          clientOrderDiscount,
         });
       }
 
@@ -169,7 +466,7 @@ async function startServer() {
       try {
         paystackData = JSON.parse(rawText) as Record<string, unknown>;
       } catch {
-        return res.status(200).json({
+        return res.status(400).json({
           verified: false,
           status: 'paystack_api_error',
           message: `Paystack API returned non-JSON response (HTTP ${paystackRes.status})`,
@@ -179,7 +476,7 @@ async function startServer() {
       }
 
       if (!paystackRes.ok || !paystackData?.status) {
-        return res.status(200).json({
+        return res.status(400).json({
           verified: false,
           status: (paystackData?.data as Record<string, unknown>)?.status || paystackData?.code || 'failed',
           message: paystackData?.message || 'Transaction could not be verified by Paystack',
@@ -190,31 +487,74 @@ async function startServer() {
 
       const tx = (paystackData.data || {}) as Record<string, unknown>;
       const isSuccess = tx.status === 'success';
-
-      // Validate amount in kobo if expected
-      if (expectedAmount && isSuccess) {
-        const expectedKobo = Math.round(Number(expectedAmount) * 100);
-        const paidAmount = Number(tx.amount || 0);
-        if (paidAmount < expectedKobo) {
-          return res.status(200).json({
-            verified: false,
-            status: 'amount_mismatch',
-            message: `Paid amount (₦${paidAmount / 100}) does not match order total (₦${expectedAmount})`,
-            rawResponse: paystackData,
-          });
-        }
+      if (!isSuccess) {
+        return res.status(400).json({
+          verified: false,
+          status: String(tx.status || 'failed'),
+          message: `Payment status is "${tx.status}".`,
+        });
       }
 
-      // Mark as processed in local memory registry
-      if (isSuccess && tx.reference) {
+      // Compare paid amount strictly against SERVER-CALCULATED total (never client expectedAmount)
+      const paidKobo = Number(tx.amount || 0);
+      if (Math.abs(paidKobo - serverExpectedKobo) > 100) {
+        return res.status(400).json({
+          verified: false,
+          status: 'amount_mismatch',
+          message: `Paid amount (₦${(paidKobo / 100).toLocaleString()}) does not match server-calculated order total (₦${serverExpectedTotalNaira.toLocaleString()})`,
+          paidKobo,
+          serverExpectedKobo,
+        });
+      }
+
+      if (tx.reference) {
         processedReferences.add(String(tx.reference));
       }
 
+      // 5. Finalize the order in Supabase server-side (status -> placed, payment_status -> paid, stock decrement, coupon used_count increment)
+      try {
+        await fetch(`${supabaseUrl}/rest/v1/rpc/claim_order_stock_decrement`, {
+          method: 'POST',
+          headers: {
+            apikey: supabaseKey,
+            Authorization: `Bearer ${supabaseKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            p_order_number: cleanRef,
+            p_payment_reference: String(tx.reference || cleanRef),
+          }),
+        });
+
+        if (hasServiceRole) {
+          await fetch(`${supabaseUrl}/rest/v1/orders?order_number=eq.${encodeURIComponent(cleanRef)}`, {
+            method: 'PATCH',
+            headers: {
+              apikey: supabaseKey,
+              Authorization: `Bearer ${supabaseKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              status: 'placed',
+              subtotal: serverSubtotal,
+              discount_amount: serverDiscountAmount,
+              delivery_fee: serverDeliveryFee,
+              total: serverExpectedTotalNaira,
+              updated_at: new Date().toISOString(),
+            }),
+          });
+        }
+      } catch (finErr) {
+        console.warn('[Server Paystack Verify] Order finalization RPC notice:', finErr);
+      }
+
       return res.status(200).json({
-        verified: isSuccess,
+        verified: true,
         status: tx.status,
         reference: tx.reference,
-        amount: tx.amount,
+        amount: paidKobo,
+        serverExpectedKobo,
+        serverDiscountAmount,
         channel: tx.channel,
         paid_at: tx.paid_at,
         customer: tx.customer,
@@ -236,12 +576,17 @@ async function startServer() {
   // ============================================================
   app.post('/api/paystack-webhook', async (req: RequestWithRawBody, res) => {
     try {
-      // Rate limit webhook endpoint to prevent denial-of-service (max 30/minute)
-      const webhookIp = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown');
-      const webhookLimit = checkRateLimit(`webhook_${webhookIp}`, 30, 60000);
+      // Database-backed rate limit on webhook endpoint (max 30/minute per IP)
+      const webhookIp = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown')
+        .split(',')[0]
+        .trim();
+      const webhookLimit = await checkDatabaseRateLimit(`paystack_webhook:${webhookIp}`, 30, 60);
       if (!webhookLimit.allowed) {
         res.setHeader('Retry-After', String(webhookLimit.resetInSec));
-        return res.status(429).json({ error: 'Webhook rate limit exceeded' });
+        return res.status(429).json({
+          error: 'Webhook rate limit exceeded',
+          enforcedBy: webhookLimit.enforcedBy,
+        });
       }
 
       const secretKey = process.env.PAYSTACK_SECRET_KEY?.trim();
@@ -288,10 +633,7 @@ async function startServer() {
 
         // Database-level idempotency check:
         // Try to atomically claim stock decrement on the database
-        const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://otdvuuxmnlfjvtjifudq.supabase.co';
-        const supabaseKey =
-          process.env.VITE_SUPABASE_ANON_KEY ||
-          'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im90ZHZ1dXhtbmxmanZ0amlmdWRxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk2MTc5MTYsImV4cCI6MjEwNTE5MzkxNn0.Wm-6krE2MxQJCSxxSq5KUKDIwuSfo8SGE0KxJunN1Pw';
+        const { supabaseUrl, supabaseKey } = getSupabaseConfig();
 
         try {
           const claimResp = await fetch(`${supabaseUrl}/rest/v1/rpc/claim_order_stock_decrement`, {
@@ -344,10 +686,7 @@ async function startServer() {
     const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown');
     const key = email || ip;
 
-    const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://otdvuuxmnlfjvtjifudq.supabase.co';
-    const supabaseKey =
-      process.env.VITE_SUPABASE_ANON_KEY ||
-      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im90ZHZ1dXhtbmxmanZ0amlmdWRxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk2MTc5MTYsImV4cCI6MjEwNTE5MzkxNn0.Wm-6krE2MxQJCSxxSq5KUKDIwuSfo8SGE0KxJunN1Pw';
+    const { supabaseUrl, supabaseKey } = getSupabaseConfig();
 
     // 1. Check authoritative PostgreSQL database first
     if (email) {
@@ -406,10 +745,7 @@ async function startServer() {
     const now = Date.now();
     let record = adminLoginAttempts.get(key);
 
-    const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://otdvuuxmnlfjvtjifudq.supabase.co';
-    const supabaseKey =
-      process.env.VITE_SUPABASE_ANON_KEY ||
-      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im90ZHZ1dXhtbmxmanZ0amlmdWRxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk2MTc5MTYsImV4cCI6MjEwNTE5MzkxNn0.Wm-6krE2MxQJCSxxSq5KUKDIwuSfo8SGE0KxJunN1Pw';
+    const { supabaseUrl, supabaseKey } = getSupabaseConfig();
 
     if (success) {
       if (record) {
@@ -696,10 +1032,7 @@ async function startServer() {
       }
 
       // Update order in Supabase
-      const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://otdvuuxmnlfjvtjifudq.supabase.co';
-      const supabaseKey =
-        process.env.VITE_SUPABASE_ANON_KEY ||
-        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im90ZHZ1dXhtbmxmanZ0amlmdWRxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk2MTc5MTYsImV4cCI6MjEwNTE5MzkxNn0.Wm-6krE2MxQJCSxxSq5KUKDIwuSfo8SGE0KxJunN1Pw';
+      const { supabaseUrl, supabaseKey } = getSupabaseConfig();
 
       try {
         await fetch(`${supabaseUrl}/rest/v1/orders?order_number=eq.${encodeURIComponent(order_number)}`, {
@@ -734,10 +1067,7 @@ async function startServer() {
 
   // 2. Automated cron / time-check endpoint for pending orders
   const runAbandonedOrdersCheck = async (forceAll = false, baseUrl = 'https://jazelleskinhaven.com') => {
-    const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://otdvuuxmnlfjvtjifudq.supabase.co';
-    const supabaseKey =
-      process.env.VITE_SUPABASE_ANON_KEY ||
-      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im90ZHZ1dXhtbmxmanZ0amlmdWRxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk2MTc5MTYsImV4cCI6MjEwNTE5MzkxNn0.Wm-6krE2MxQJCSxxSq5KUKDIwuSfo8SGE0KxJunN1Pw';
+    const { supabaseUrl, supabaseKey } = getSupabaseConfig();
 
     const resp = await fetch(
       `${supabaseUrl}/rest/v1/orders?select=*&status=eq.pending&order=created_at.desc`,

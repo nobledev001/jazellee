@@ -1,17 +1,13 @@
 import { useEffect, useState, useRef } from 'react';
-import { ArrowRight, CreditCard, Building2, Smartphone, Check, Lock, ChevronDown, AlertCircle, Sparkles } from 'lucide-react';
+import { ArrowRight, CreditCard, Building2, Smartphone, Check, Lock, ChevronDown, AlertCircle, Sparkles, Ticket, X, CheckCircle2 } from 'lucide-react';
 import { useStore, getCartProducts } from '@/store/StoreContext';
 import { formatNaira } from '@/lib/format';
 import { useRouter } from '@/router';
 import { useAuth, supabase, recordCustomerProfile } from '@/lib/auth';
-import { decreaseProductStock } from '@/lib/stock';
 import { sendOrderConfirmationEmail } from '@/lib/email';
 import { getPaystackPublicKey, verifyPaystackTransactionOnServer, ensurePaystackScriptLoaded } from '@/lib/paystack';
 
 type PaymentMethod = 'card' | 'bank' | 'ussd';
-
-const DELIVERY_FEE = 3500;
-const FREE_DELIVERY_THRESHOLD = 40000;
 
 const NIGERIAN_STATES = [
   'Abia', 'Adamawa', 'Akwa Ibom', 'Anambra', 'Bauchi', 'Bayelsa', 'Benue', 'Borno', 'Cross River', 'Delta', 'Ebonyi', 'Edo', 'Ekiti', 'Enugu', 'FCT (Abuja)', 'Gombe', 'Imo', 'Jigawa', 'Kaduna', 'Kano', 'Katsina', 'Kebbi', 'Kogi', 'Kwara', 'Lagos', 'Nasarawa', 'Niger', 'Ogun', 'Ondo', 'Osun', 'Oyo', 'Plateau', 'Rivers', 'Sokoto', 'Taraba', 'Yobe', 'Zamfara',
@@ -38,10 +34,39 @@ declare global {
 }
 
 export default function CheckoutPage() {
-  const { cart, cartSubtotal, clearCart } = useStore();
+  const {
+    cart,
+    cartSubtotal,
+    deliveryFee,
+    appliedCoupon,
+    discountAmount,
+    cartTotal,
+    applyCoupon,
+    removeCoupon,
+    incrementCouponUsage,
+    clearCart,
+  } = useStore();
   const { navigate } = useRouter();
   const { user } = useAuth();
   const items = getCartProducts(cart);
+
+  const [promoInput, setPromoInput] = useState('');
+  const [applyingPromo, setApplyingPromo] = useState(false);
+  const [promoFeedback, setPromoFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const handleApplyPromo = async () => {
+    if (!promoInput.trim()) return;
+    setApplyingPromo(true);
+    setPromoFeedback(null);
+    const res = await applyCoupon(promoInput);
+    setApplyingPromo(false);
+    if (res.success) {
+      setPromoInput('');
+      setPromoFeedback({ type: 'success', text: res.message });
+    } else {
+      setPromoFeedback({ type: 'error', text: res.message });
+    }
+  };
 
   const [form, setForm] = useState({
     fullName: '',
@@ -71,22 +96,30 @@ export default function CheckoutPage() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [paymentNotice, setPaymentNotice] = useState<string | null>(null);
 
-  // Check for ?resume=... in URL to restore pending order
+  // Check for ?resume=... in URL to restore pending order via SECURITY DEFINER track_order RPC
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const resumeCode = params.get('resume')?.trim();
+    const resumeContact = (params.get('contact') || params.get('email') || '').trim();
     if (resumeCode) {
       setRestoringCart(true);
       (async () => {
         try {
-          const { data, error } = await supabase
-            .from('orders')
-            .select('*')
-            .eq('order_number', resumeCode)
-            .maybeSingle();
+          let rpcRes = await supabase.rpc('track_order', {
+            p_order_number: resumeCode,
+            ...(resumeContact ? { p_contact: resumeContact } : {}),
+          });
 
-          if (!error && data) {
-            const ord = data as Record<string, unknown>;
+          if (rpcRes.error && !resumeContact) {
+            rpcRes = await supabase.rpc('track_order', {
+              p_order_number: resumeCode,
+              p_contact: '',
+            });
+          }
+
+          const rawData = Array.isArray(rpcRes.data) ? rpcRes.data[0] : rpcRes.data;
+          if (!rpcRes.error && rawData && typeof rawData === 'object') {
+            const ord = rawData as Record<string, unknown>;
             if (ord.status === 'pending' || (ord.status !== 'placed' && ord.payment_status !== 'paid')) {
               const code = String(ord.order_number || resumeCode);
               setResumedOrderNumber(code);
@@ -159,8 +192,7 @@ export default function CheckoutPage() {
     );
   }
 
-  const deliveryFee = cartSubtotal >= FREE_DELIVERY_THRESHOLD ? 0 : DELIVERY_FEE;
-  const total = cartSubtotal + deliveryFee;
+  const total = cartTotal;
 
   const validate = (): boolean => {
     const next: Record<string, string> = {};
@@ -191,69 +223,19 @@ export default function CheckoutPage() {
   };
 
   /**
-   * Finalizes order upon verified Paystack payment:
-   * 1. Updates order status in Supabase to 'placed'
-   * 2. Automatically decreases product stock (idempotent with orderNumber)
-   * 3. Sends transactional order confirmation email
-   * 4. Clears cart and navigates to confirmation page
+   * Finalizes post-payment client actions after verify-paystack has verified the payment
+   * and finalized the order server-side (status -> placed, payment_status -> paid,
+   * stock decremented, coupon used_count incremented).
    */
   const handlePaymentSuccess = async (paymentRef: string, orderNumber: string) => {
     try {
-      console.group('💳 [CHECKOUT] Step 2: Post-Payment Order Update');
-      console.log('1. Payment succeeded via Paystack with reference:', paymentRef);
-      console.log('2. Updating order status to "placed" in Supabase for order:', orderNumber);
+      console.group('💳 [CHECKOUT] Step 2: Post-Payment Completion (Server-Finalized)');
+      console.log('1. Payment verified & finalized server-side for reference:', paymentRef, 'order:', orderNumber);
 
-      // Server/Database Idempotency Check: if already finalized by webhook or concurrent callback, skip
-      const { data: existingOrder } = await supabase
-        .from('orders')
-        .select('status, stock_decremented')
-        .eq('order_number', orderNumber)
-        .maybeSingle();
-
-      if (existingOrder?.status === 'placed' && existingOrder?.stock_decremented === true) {
-        console.log('[Checkout Idempotency] Order already finalized and stock decremented in database. Skipping duplicate finalization.');
-        clearCart();
-        isSubmittingRef.current = false;
-        setProcessing(false);
-        navigate(`/order-confirmation?id=${orderNumber}`);
-        return;
-      }
-
-      // 1. Get authenticated user ID if logged in
       const { data: authData } = await supabase.auth.getSession();
       const currentUserId = authData?.session?.user?.id;
 
-      const orderPayload: Record<string, unknown> = {
-        order_number: orderNumber,
-        payment_reference: paymentRef,
-        items: items.map(({ product, quantity }) => ({
-          slug: product.slug,
-          name: product.name,
-          price: product.price,
-          quantity,
-          image: product.image,
-        })),
-        subtotal: cartSubtotal,
-        delivery_fee: deliveryFee,
-        total,
-        customer_name: form.fullName.trim(),
-        customer_email: form.email.trim(),
-        customer_phone: form.phone.trim(),
-        delivery_address: form.address.trim(),
-        delivery_state: form.state,
-        delivery_lga: form.lga.trim(),
-        delivery_landmark: form.landmark.trim(),
-        payment_method: form.paymentMethod,
-        payment_status: 'paid',
-        status: 'placed',
-        updated_at: new Date().toISOString(),
-      };
-
-      if (currentUserId && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(currentUserId)) {
-        orderPayload.user_id = currentUserId;
-      }
-
-      // Record shopper profile in customer directory
+      // Record shopper profile in customer directory if authenticated
       void recordCustomerProfile({
         id: currentUserId || undefined,
         email: form.email.trim(),
@@ -261,48 +243,12 @@ export default function CheckoutPage() {
         phone: form.phone.trim(),
       });
 
-      // 2. Update order record in Supabase to mark as placed
-      const updateResult = await supabase
-        .from('orders')
-        .update({
-          status: 'placed',
-          updated_at: new Date().toISOString(),
-        })
-        .eq('order_number', orderNumber);
-
-      if (updateResult.error) {
-        console.warn('⚠️ [CHECKOUT] Update error, falling back to direct insert:', updateResult.error);
-        const insertFallback = await supabase.from('orders').insert({
-          ...orderPayload,
-          status: 'placed',
-        });
-        if (insertFallback.error) {
-          console.error('❌ [CHECKOUT] Fallback insert also failed:', insertFallback.error);
-        } else {
-          console.log('✅ [CHECKOUT] Fallback insert created order with status="placed"');
-        }
-      } else {
-        console.log('✅ [CHECKOUT] Supabase order successfully marked as status="placed"!');
-      }
-      console.groupEnd();
-
       // Notify admin & other windows that order is now paid
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('jazelle_orders_updated'));
       }
 
-      // 3. Automatically decrease product stock idempotently with database-level guard
-      await decreaseProductStock(
-        items.map(({ product, quantity }) => ({
-          slug: product.slug,
-          name: product.name,
-          quantity,
-        })),
-        orderNumber,
-        paymentRef
-      );
-
-      // 4. Trigger transactional order confirmation email via Resend
+      // Trigger transactional order confirmation email via Resend
       await sendOrderConfirmationEmail({
         order_number: orderNumber,
         customer_name: form.fullName.trim(),
@@ -323,17 +269,23 @@ export default function CheckoutPage() {
         payment_method: form.paymentMethod,
       });
 
-      // 5. Clear cart and navigate to confirmation screen
+      console.groupEnd();
+
+      // Clear local coupon & cart state and navigate to confirmation screen
+      await incrementCouponUsage();
       clearCart();
       isSubmittingRef.current = false;
       setProcessing(false);
-      navigate(`/order-confirmation?id=${orderNumber}`);
-    } catch (err) {
+      navigate(
+        `/order-confirmation?id=${encodeURIComponent(orderNumber)}&email=${encodeURIComponent(form.email.trim())}`
+      );
+    } catch (err: unknown) {
       console.error('[Checkout] Post-payment processing error:', err);
-      clearCart();
+      console.groupEnd();
       isSubmittingRef.current = false;
       setProcessing(false);
-      navigate(`/order-confirmation?id=${orderNumber}`);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      setPaymentNotice(`Order finalization failed: ${errMsg}`);
     }
   };
 
@@ -352,29 +304,51 @@ export default function CheckoutPage() {
     }
     setPaymentNotice(null);
 
-    // Reuse ONE stable transaction reference for this checkout attempt across retries
-    const orderNumber = checkoutReference;
+    let orderNumber = checkoutReference;
     const paystackKey = getPaystackPublicKey();
+
+    // Check if localStorage['jazelle-applied-coupon'] was modified directly in DevTools
+    let activeCoupon = appliedCoupon;
+    try {
+      const rawStoredCoupon = localStorage.getItem('jazelle-applied-coupon');
+      if (rawStoredCoupon) {
+        const parsedCoupon = JSON.parse(rawStoredCoupon);
+        if (parsedCoupon && typeof parsedCoupon === 'object' && parsedCoupon.code) {
+          activeCoupon = {
+            code: String(parsedCoupon.code).trim().toUpperCase(),
+            discount_type: String(parsedCoupon.discount_type || 'percentage'),
+            discount_value: Number(parsedCoupon.discount_value) || 0,
+          };
+        }
+      }
+    } catch {
+      // ignore malformed JSON
+    }
+
+    let effectiveDiscount = discountAmount;
+    if (activeCoupon && cartSubtotal > 0) {
+      if (activeCoupon.discount_type === 'percentage') {
+        effectiveDiscount = Math.min(
+          cartSubtotal,
+          Math.round((cartSubtotal * Number(activeCoupon.discount_value)) / 100)
+        );
+      } else {
+        effectiveDiscount = Math.min(cartSubtotal, Math.max(0, Number(activeCoupon.discount_value)));
+      }
+    }
+    const effectiveTotal = Math.max(0, cartSubtotal - effectiveDiscount) + (cartSubtotal > 0 ? deliveryFee : 0);
 
     // 1. AUTO-SUBSCRIBE TO NEWSLETTER ON CHECKOUT (if customer checked box)
     if (subscribeNewsletter && form.email.trim()) {
       try {
         const cleanEmail = form.email.trim().toLowerCase();
-        void supabase.from('newsletter_subscribers').insert({
+        const { error: newsErr } = await supabase.from('newsletter_subscribers').insert({
           email: cleanEmail,
           source: 'checkout',
           created_at: new Date().toISOString(),
         });
-
-        // Also persist in local newsletter storage
-        const localSubs = JSON.parse(localStorage.getItem('jazelle_newsletter_subscribers') || '[]');
-        if (!localSubs.some((s: { email?: string }) => s.email === cleanEmail)) {
-          localSubs.unshift({
-            email: cleanEmail,
-            source: 'checkout',
-            created_at: new Date().toISOString(),
-          });
-          localStorage.setItem('jazelle_newsletter_subscribers', JSON.stringify(localSubs));
+        if (newsErr && newsErr.code !== '23505') {
+          console.error('[Checkout] Newsletter subscription database error:', newsErr.message);
         }
       } catch (newsErr) {
         console.warn('[Checkout] Auto-subscribe newsletter notice:', newsErr);
@@ -382,74 +356,75 @@ export default function CheckoutPage() {
     }
 
     // 2. CREATE PENDING ORDER RECORD IMMEDIATELY (BEFORE PAYMENT COMPLETES)
-    // This provides full admin visibility and cart recovery even if customer closes browser
     try {
       console.group('🛒 [CHECKOUT] Step 1: Pre-Payment Pending Order Insertion');
-      console.log('1. Initiating pre-payment pending order creation for order number:', orderNumber);
-      console.log('2. Customer details:', {
-        fullName: form.fullName.trim(),
-        email: form.email.trim(),
-        phone: form.phone.trim(),
-      });
-
       const { data: authData } = await supabase.auth.getSession();
       const currentUserId = authData?.session?.user?.id;
 
-      // Note: Only include columns that actually exist in the remote Supabase 'orders' schema.
-      // Columns like payment_status, reminder_sent, reminder_sent_at do not exist on the remote schema and cause PGRST204 errors.
-      const pendingPayload: Record<string, unknown> = {
-        order_number: orderNumber,
-        items: items.map(({ product, quantity }) => ({
-          slug: product.slug,
-          name: product.name,
-          price: product.price,
-          quantity,
-          image: product.image,
-        })),
-        subtotal: cartSubtotal,
-        delivery_fee: deliveryFee,
-        total,
-        status: 'pending',
-        customer_name: form.fullName.trim(),
-        customer_email: form.email.trim(),
-        customer_phone: form.phone.trim(),
-        delivery_address: form.address.trim(),
-        delivery_state: form.state,
-        delivery_lga: form.lga.trim(),
-        delivery_landmark: form.landmark.trim(),
-        payment_method: form.paymentMethod,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
+      const buildPendingPayload = (ordNum: string): Record<string, unknown> => {
+        const payload: Record<string, unknown> = {
+          order_number: ordNum,
+          items: items.map(({ product, quantity }) => ({
+            slug: product.slug,
+            name: product.name,
+            price: product.price,
+            quantity,
+            image: product.image,
+          })),
+          subtotal: cartSubtotal,
+          delivery_fee: deliveryFee,
+          discount_amount: effectiveDiscount,
+          coupon_code: activeCoupon ? activeCoupon.code : null,
+          total: effectiveTotal,
+          status: 'pending',
+          customer_name: form.fullName.trim(),
+          customer_email: form.email.trim(),
+          customer_phone: form.phone.trim(),
+          delivery_address: form.address.trim(),
+          delivery_state: form.state,
+          delivery_lga: form.lga.trim(),
+          delivery_landmark: form.landmark.trim(),
+          payment_method: form.paymentMethod,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+
+        if (
+          currentUserId &&
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(currentUserId)
+        ) {
+          payload.user_id = currentUserId;
+        }
+        return payload;
       };
 
-      if (currentUserId && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(currentUserId)) {
-        pendingPayload.user_id = currentUserId;
-      }
-
-      console.log('3. Sending pre-payment payload to Supabase "orders" table:', pendingPayload);
-
-      // Perform insertion into Supabase orders table
-      const insertResult = await supabase.from('orders').insert(pendingPayload);
-      console.log('4. Supabase raw insert response:', insertResult);
+      let pendingPayload = buildPendingPayload(orderNumber);
+      let insertResult = await supabase.from('orders').insert(pendingPayload);
 
       if (insertResult.error) {
+        // Guests do not have UPDATE permission on public.orders under RLS.
+        // If retrying checkout with an already-inserted order_number (23505), generate a fresh order reference.
         if (insertResult.error.code === '23505') {
-          console.log('ℹ️ [CHECKOUT] Order number already exists in Supabase. Updating existing row with status="pending"...');
-          const updateResult = await supabase.from('orders').update(pendingPayload).eq('order_number', orderNumber);
-          if (updateResult.error) {
-            console.error('❌ [CHECKOUT] Supabase pre-payment update FAILED:', updateResult.error);
-          } else {
-            console.log('✅ [CHECKOUT] Supabase pre-payment order updated successfully with status="pending"!');
-          }
-        } else {
-          console.error('❌ [CHECKOUT] Supabase pre-payment insert FAILED:', insertResult.error);
+          orderNumber = `JAZ-${Date.now().toString().slice(-8)}`;
+          setCheckoutReference(orderNumber);
+          pendingPayload = buildPendingPayload(orderNumber);
+          insertResult = await supabase.from('orders').insert(pendingPayload);
         }
-      } else {
-        console.log('✅ [CHECKOUT] Supabase pre-payment insert SUCCEEDED! Row created in "orders" table with status="pending".');
+
+        if (insertResult.error) {
+          console.error('❌ [CHECKOUT] Supabase pre-payment insert FAILED:', insertResult.error);
+          console.groupEnd();
+          isSubmittingRef.current = false;
+          setProcessing(false);
+          setPaymentNotice(
+            `Database Error creating order (${insertResult.error.code || 'Error'}): ${insertResult.error.message}`
+          );
+          return;
+        }
       }
       console.groupEnd();
 
-      // Save customer profile directory entry
+      // Save customer profile directory entry if authenticated
       void recordCustomerProfile({
         id: currentUserId || undefined,
         email: form.email.trim(),
@@ -462,9 +437,14 @@ export default function CheckoutPage() {
         window.dispatchEvent(new CustomEvent('jazelle_orders_updated'));
         window.dispatchEvent(new CustomEvent('jazelle_order_created', { detail: pendingPayload }));
       }
-    } catch (pendingErr) {
+    } catch (pendingErr: unknown) {
       console.error('❌ [CHECKOUT] Pre-payment pending order exception caught:', pendingErr);
       console.groupEnd();
+      isSubmittingRef.current = false;
+      setProcessing(false);
+      const errMsg = pendingErr instanceof Error ? pendingErr.message : String(pendingErr);
+      setPaymentNotice(`Database Error creating order: ${errMsg}`);
+      return;
     }
 
     const channels: string[] =
@@ -490,7 +470,7 @@ export default function CheckoutPage() {
       const handler = window.PaystackPop.setup({
         key: paystackKey,
         email: form.email,
-        amount: Math.round(total * 100), // in kobo
+        amount: Math.round(effectiveTotal * 100), // in kobo
         currency: 'NGN',
         ref: orderNumber,
         channels,
@@ -512,7 +492,11 @@ export default function CheckoutPage() {
           setPaymentNotice('Payment received by Paystack. Verifying transaction securely with backend...');
 
           void (async () => {
-            const verification = await verifyPaystackTransactionOnServer(paymentRef, total);
+            const verification = await verifyPaystackTransactionOnServer(
+              paymentRef,
+              effectiveTotal,
+              form.email.trim()
+            );
 
             if (!verification.verified) {
               isSubmittingRef.current = false;
@@ -791,11 +775,90 @@ export default function CheckoutPage() {
               ))}
             </div>
 
+            {/* Promo Code Input */}
+            <div className="mt-4 pt-4 border-t border-blush-100">
+              <label className="block text-xs font-semibold text-berry-700 mb-2">
+                Promo Code
+              </label>
+
+              {appliedCoupon ? (
+                <div className="flex items-center justify-between gap-2 rounded-2xl bg-sage-50 border border-sage-200 px-3.5 py-2.5">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Ticket className="h-4 w-4 text-sage-600 shrink-0" />
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold text-sage-800 font-mono">{appliedCoupon.code}</p>
+                      <p className="text-[11px] text-sage-600 truncate">
+                        {appliedCoupon.discount_type === 'percentage'
+                          ? `${appliedCoupon.discount_value}% off applied`
+                          : `${formatNaira(appliedCoupon.discount_value)} off applied`}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      removeCoupon();
+                      setPromoFeedback(null);
+                    }}
+                    className="p-1 rounded-full text-sage-600 hover:bg-sage-100 transition-colors cursor-pointer"
+                    aria-label="Remove promo code"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              ) : (
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={promoInput}
+                    onChange={(e) => setPromoInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        void handleApplyPromo();
+                      }
+                    }}
+                    placeholder="Enter code (e.g. GLOW10)"
+                    className="input-jazelle !py-2 !px-3.5 text-xs uppercase flex-1"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void handleApplyPromo()}
+                    disabled={applyingPromo || !promoInput.trim()}
+                    className="rounded-full bg-berry-800 px-4 py-2 text-xs font-semibold text-white hover:bg-berry-700 transition-colors disabled:opacity-50 cursor-pointer shrink-0"
+                  >
+                    {applyingPromo ? 'Checking…' : 'Apply'}
+                  </button>
+                </div>
+              )}
+
+              {promoFeedback && (
+                <div
+                  className={`mt-2 flex items-center gap-1.5 text-xs ${
+                    promoFeedback.type === 'success' ? 'text-sage-700' : 'text-blush-600'
+                  }`}
+                >
+                  {promoFeedback.type === 'success' ? (
+                    <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                  ) : (
+                    <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                  )}
+                  <span>{promoFeedback.text}</span>
+                </div>
+              )}
+            </div>
+
             <div className="mt-4 space-y-2 border-t border-blush-100 pt-4 text-sm">
               <div className="flex justify-between text-berry-500">
                 <span>Subtotal</span>
                 <span className="font-medium text-berry-700">{formatNaira(cartSubtotal)}</span>
               </div>
+              {appliedCoupon && discountAmount > 0 && (
+                <div className="flex justify-between text-sage-700 font-medium">
+                  <span>Discount ({appliedCoupon.code})</span>
+                  <span>-{formatNaira(discountAmount)}</span>
+                </div>
+              )}
               <div className="flex justify-between text-berry-500">
                 <span>Delivery across Nigeria</span>
                 <span className="font-medium text-berry-700">

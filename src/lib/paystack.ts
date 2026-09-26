@@ -1,32 +1,29 @@
 /**
  * Client-side Paystack utilities for Jazelle Skin Haven.
- * 
- * ARCHITECTURE:
- * This is a static React/Vite client deployed to Vercel/CDN with no serverless backend routes of its own.
- * All payment verification calls are made DIRECTLY to the deployed Supabase Edge Function full URL:
- * https://otdvuuxmnlfjvtjifudq.supabase.co/functions/v1/verify-paystack
- * 
- * Required request headers:
- * - Authorization: Bearer [VITE_SUPABASE_ANON_KEY]
- * - apikey: [VITE_SUPABASE_ANON_KEY]
- * - Content-Type: application/json
+ *
+ * All payment verification and order finalization (marking order as placed/paid,
+ * decrementing product stock, and incrementing coupon used_count) happens strictly
+ * server-side via the verify-paystack Edge Function / backend API.
+ * Client-supplied expectedAmount is never trusted as the source of truth.
  */
 
 export const getVerifyPaystackEndpoint = (): string => getVerifyPaystackUrl();
 export const SUPABASE_VERIFY_PAYSTACK_URL =
-  ((typeof import.meta !== 'undefined' && import.meta?.env?.VITE_SUPABASE_URL)
+  typeof import.meta !== 'undefined' && import.meta?.env?.VITE_SUPABASE_URL
     ? `${import.meta.env.VITE_SUPABASE_URL.replace(/\/+$/, '')}/functions/v1/verify-paystack`
-    : '/api/verify-paystack');
+    : '/api/verify-paystack';
 
 export interface PaystackVerificationResult {
   verified: boolean;
   status?: string;
   message?: string;
   amount?: number;
+  serverExpectedKobo?: number;
+  serverDiscountAmount?: number;
   reference?: string;
   channel?: string;
   paid_at?: string;
-  simulated?: boolean;
+  enforcedBy?: string;
   rawResponse?: unknown;
   httpStatus?: number;
   endpointCalled?: string;
@@ -45,9 +42,12 @@ interface VerificationApiResponse {
   error?: string;
   code?: string;
   amount?: number;
+  serverExpectedKobo?: number;
+  serverDiscountAmount?: number;
   reference?: string;
   channel?: string;
   paid_at?: string;
+  enforcedBy?: string;
   customer?: Record<string, unknown>;
   rawResponse?: unknown;
   data?: Record<string, unknown>;
@@ -66,7 +66,6 @@ export async function ensurePaystackScriptLoaded(): Promise<boolean> {
 
   if (isReady()) return true;
 
-  // Poll for up to 3 seconds if script is already in the document
   const existing = document.querySelector('script[src*="paystack.co"]');
   if (existing) {
     const startTime = Date.now();
@@ -77,7 +76,6 @@ export async function ensurePaystackScriptLoaded(): Promise<boolean> {
     return isReady();
   }
 
-  // Otherwise dynamically inject script tag
   return new Promise((resolve) => {
     const script = document.createElement('script');
     script.src = 'https://js.paystack.co/v1/inline.js';
@@ -100,25 +98,16 @@ export async function ensurePaystackScriptLoaded(): Promise<boolean> {
   });
 }
 
-/**
- * Retrieves the client-safe public Paystack key from environment variables.
- */
 export function getPaystackPublicKey(): string {
   const envKey = (import.meta.env.VITE_PAYSTACK_PUBLIC_KEY as string | undefined)?.trim();
   return envKey || '';
 }
 
-/**
- * Retrieves the configured Supabase base URL from environment variables.
- */
 export function getSupabaseBaseUrl(): string {
   const envUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.trim();
   return (envUrl || '').replace(/\/+$/, '');
 }
 
-/**
- * Retrieves the Supabase Anon Key for Authorization and apikey headers.
- */
 export function getSupabaseAnonKey(): string {
   const envKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined)?.trim();
   return envKey || '';
@@ -133,18 +122,24 @@ export function getVerifyPaystackUrl(): string {
 }
 
 /**
- * Calls the server-side payment verification endpoint (Supabase Edge Function or backend API)
- * to verify transaction validity using the server-stored PAYSTACK_SECRET_KEY.
+ * Calls the server-side payment verification endpoint to:
+ * 1. Look up the order in public.orders by reference
+ * 2. Recalculate the true expected total from public.products and public.coupons
+ * 3. Verify the payment with Paystack and compare against the server-calculated total
+ * 4. Finalize the order (status -> placed, payment_status -> paid, stock decrement, coupon used_count increment)
  */
 export async function verifyPaystackTransactionOnServer(
   reference: string,
-  expectedAmount?: number
+  expectedAmount?: number,
+  contact?: string
 ): Promise<PaystackVerificationResult> {
   const anonKey = getSupabaseAnonKey();
-  const targetUrl = getVerifyPaystackUrl();
+  const edgeUrl = getVerifyPaystackUrl();
 
+  // First check the full-stack server endpoint (/api/verify-paystack) if available,
+  // which enforces server-side order & coupon recalculation and delegates to Supabase Edge Function.
   try {
-    const response = await fetch(targetUrl, {
+    const apiRes = await fetch('/api/verify-paystack', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -154,6 +149,53 @@ export async function verifyPaystackTransactionOnServer(
       body: JSON.stringify({
         reference,
         expectedAmount,
+        contact,
+      }),
+    });
+
+    if (apiRes.status !== 404) {
+      const rawText = await apiRes.text();
+      try {
+        const parsed = JSON.parse(rawText) as VerificationApiResponse;
+        return {
+          ...parsed,
+          verified: Boolean(parsed.verified),
+          status: parsed.status,
+          message:
+            parsed.message ||
+            parsed.error ||
+            (parsed.verified ? 'Payment successfully verified.' : 'Verification failed.'),
+          amount: parsed.amount,
+          serverExpectedKobo: parsed.serverExpectedKobo,
+          serverDiscountAmount: parsed.serverDiscountAmount,
+          reference: parsed.reference || reference,
+          channel: parsed.channel,
+          paid_at: parsed.paid_at,
+          enforcedBy: parsed.enforcedBy,
+          rawResponse: parsed.rawResponse || parsed,
+          httpStatus: apiRes.status,
+          endpointCalled: '/api/verify-paystack',
+        };
+      } catch {
+        // Fall through to Edge Function URL if response was not JSON
+      }
+    }
+  } catch {
+    // Fall through to Edge Function URL if local API route is unavailable
+  }
+
+  try {
+    const response = await fetch(edgeUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${anonKey}`,
+        apikey: anonKey,
+      },
+      body: JSON.stringify({
+        reference,
+        expectedAmount,
+        contact,
       }),
     });
 
@@ -170,7 +212,7 @@ export async function verifyPaystackTransactionOnServer(
         message: `Verification endpoint returned non-JSON (HTTP ${httpStatus})`,
         rawResponse: rawText.slice(0, 150),
         httpStatus,
-        endpointCalled: targetUrl,
+        endpointCalled: edgeUrl,
       };
     }
 
@@ -178,24 +220,30 @@ export async function verifyPaystackTransactionOnServer(
       ...parsed,
       verified: Boolean(parsed.verified),
       status: parsed.status,
-      message: parsed.message || (parsed.verified ? 'Payment successfully verified.' : 'Verification failed.'),
+      message:
+        parsed.message ||
+        parsed.error ||
+        (parsed.verified ? 'Payment successfully verified.' : 'Verification failed.'),
       amount: parsed.amount,
+      serverExpectedKobo: parsed.serverExpectedKobo,
+      serverDiscountAmount: parsed.serverDiscountAmount,
       reference: parsed.reference || reference,
       channel: parsed.channel,
       paid_at: parsed.paid_at,
+      enforcedBy: parsed.enforcedBy,
       rawResponse: parsed.rawResponse || parsed,
       httpStatus,
-      endpointCalled: targetUrl,
+      endpointCalled: edgeUrl,
     };
   } catch (err: unknown) {
     const errorMsg = err instanceof Error ? err.message : 'Network error';
-    console.error(`[Paystack Verification] Network error calling ${targetUrl}:`, err);
+    console.error(`[Paystack Verification] Network error calling ${edgeUrl}:`, err);
     return {
       verified: false,
       status: 'network_error',
       message: `Failed to connect to Supabase Edge Function: ${errorMsg}`,
       httpStatus: 0,
-      endpointCalled: targetUrl,
+      endpointCalled: edgeUrl,
     };
   }
 }

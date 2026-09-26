@@ -1,420 +1,248 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import { rawSupabaseClient } from '@/lib/supabaseClient';
-import type { Profile } from './supabase';
-import type { Session, User } from '@supabase/supabase-js';
+import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
+import { supabase } from '@/lib/supabaseClient';
+import { Session, User } from '@supabase/supabase-js';
 
-interface AdminAuthValue {
-  user: User | null;
+interface AdminAuthContextType {
   session: Session | null;
-  profile: Profile | null;
-  loading: boolean;
+  user: User | null;
   isAdmin: boolean;
-  signIn: (email: string, password: string) => Promise<{ error: string | null }>;
+  loading: boolean;
+  signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
 }
 
-const AdminAuthContext = createContext<AdminAuthValue | undefined>(undefined);
+const AdminAuthContext = createContext<AdminAuthContextType>({
+  session: null,
+  user: null,
+  isAdmin: false,
+  loading: true,
+  signIn: async () => ({ error: null }),
+  signOut: async () => {},
+});
 
-const VERIFIED_ADMIN_STORAGE_KEY = 'jazelle_verified_admin_v2';
+const ADMIN_ALLOWED_EMAILS = ['admin@jazelle.com'];
 
-function formatAuthErrorMessage(rawMessage?: string | null): string {
-  if (!rawMessage) return 'Invalid email or password.';
-  const lower = rawMessage.toLowerCase();
-  if (
-    lower.includes('database error querying schema') ||
-    lower.includes('invalid login credentials') ||
-    lower.includes('invalid credentials') ||
-    lower.includes('user not found') ||
-    lower.includes('invalid email or password')
-  ) {
-    return 'Invalid email or password.';
+/**
+ * Purges any legacy mock session keys from localStorage and sessionStorage
+ * so no fake or fabricated session can ever be read.
+ */
+function purgeLegacyMockSessions() {
+  if (typeof window === 'undefined') return;
+  const legacyKeys = [
+    'jazelle_mock_auth_session',
+    'jazelle_admin_auth',
+    'jazelle_admin_session',
+    'jazelle_verified_admin_v2',
+  ];
+  for (const key of legacyKeys) {
+    try {
+      window.localStorage.removeItem(key);
+      window.sessionStorage.removeItem(key);
+    } catch {
+      // Ignore storage errors
+    }
   }
-  return rawMessage;
 }
 
-export function AdminAuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [session, setSession] = useState<Session | null>(null);
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [loading, setLoading] = useState(true);
+/**
+ * Verifies against the real Supabase database that the authenticated user
+ * has role = 'admin' in public.profiles (or is in ADMIN_ALLOWED_EMAILS with a real JWT).
+ */
+async function verifyAdminAuthorization(user: User): Promise<boolean> {
+  const email = (user.email || '').trim().toLowerCase();
 
-  const fetchProfileFromSupabase = async (uid: string): Promise<Profile | null> => {
-    try {
-      const { data, error } = await rawSupabaseClient
-        .from('profiles')
-        .select('id, email, role, display_name')
-        .eq('id', uid)
-        .maybeSingle();
+  try {
+    const { data: profile, error } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', user.id)
+      .maybeSingle();
 
-      if (!error && data) {
-        return data as Profile;
-      }
-    } catch {
-      // ignore network error; return null
+    if (!error && profile && profile.role === 'admin') {
+      return true;
     }
-    return null;
-  };
+
+    if (!error && profile && profile.role && profile.role !== 'admin') {
+      return false;
+    }
+  } catch (err) {
+    console.warn('[AdminAuth] Profile role check error:', err);
+  }
+
+  const appRole = user.app_metadata?.role || user.user_metadata?.role;
+  if (appRole === 'admin') {
+    return true;
+  }
+
+  if (ADMIN_ALLOWED_EMAILS.includes(email)) {
+    return true;
+  }
+
+  return false;
+}
+
+export const AdminAuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [session, setSession] = useState<Session | null>(null);
+  const [user, setUser] = useState<User | null>(null);
+  const [isAdmin, setIsAdmin] = useState<boolean>(false);
+  const [loading, setLoading] = useState(true);
+  const isMountedRef = useRef(true);
 
   useEffect(() => {
-    // Purge any legacy local/session storage mock artifacts immediately
-    try {
-      localStorage.removeItem('jazelle_mock_session');
-      localStorage.removeItem('jazelle_admin_session');
-      sessionStorage.removeItem('jazelle_admin_session');
-    } catch {
-      // ignore storage errors
-    }
+    isMountedRef.current = true;
+    purgeLegacyMockSessions();
 
-    const verifyAndApplySession = async (sess: Session | null) => {
-      if (
-        !sess ||
-        !sess.access_token ||
-        sess.access_token === 'mock-token' ||
-        !sess.user?.id ||
-        !sess.user?.email
-      ) {
-        // Check if there is a verified session for the SQL-seeded admin@jazelle.com account
-        try {
-          const savedRaw = sessionStorage.getItem(VERIFIED_ADMIN_STORAGE_KEY);
-          if (savedRaw) {
-            const parsed = JSON.parse(savedRaw) as { session: Session; user: User; profile: Profile };
-            if (
-              parsed?.session?.access_token?.startsWith('verified-admin-jwt-') &&
-              parsed?.user?.email?.toLowerCase() === 'admin@jazelle.com'
-            ) {
-              setSession(parsed.session);
-              setUser(parsed.user);
-              setProfile(parsed.profile);
-              setLoading(false);
-              return;
-            }
-          }
-        } catch {
-          // ignore
+    const hydrateSession = async () => {
+      try {
+        const { data: { session: initialSession }, error } = await supabase.auth.getSession();
+
+        if (!isMountedRef.current) return;
+
+        if (error || !initialSession?.user) {
+          setSession(null);
+          setUser(null);
+          setIsAdmin(false);
+          setLoading(false);
+          return;
         }
 
-        setSession(null);
-        setUser(null);
-        setProfile(null);
-        setLoading(false);
-        return;
+        const authorized = await verifyAdminAuthorization(initialSession.user);
+        if (!isMountedRef.current) return;
+
+        if (authorized) {
+          setSession(initialSession);
+          setUser(initialSession.user);
+          setIsAdmin(true);
+        } else {
+          await supabase.auth.signOut();
+          setSession(null);
+          setUser(null);
+          setIsAdmin(false);
+        }
+      } catch (err) {
+        console.error('[AdminAuth] Failed to verify initial session:', err);
+        if (isMountedRef.current) {
+          setSession(null);
+          setUser(null);
+          setIsAdmin(false);
+        }
+      } finally {
+        if (isMountedRef.current) {
+          setLoading(false);
+        }
       }
-
-      // Cryptographically verify the JWT session token directly against Supabase Auth server
-      const { data: userCheck, error: userError } = await rawSupabaseClient.auth.getUser(sess.access_token);
-      if (userError || !userCheck?.user || userCheck.user.id !== sess.user.id) {
-        await rawSupabaseClient.auth.signOut();
-        setSession(null);
-        setUser(null);
-        setProfile(null);
-        setLoading(false);
-        return;
-      }
-
-      const verifiedEmail = (userCheck.user.email || '').toLowerCase();
-      const dbProf = await fetchProfileFromSupabase(userCheck.user.id);
-      const appMetaRole = (userCheck.user.app_metadata as Record<string, unknown> | undefined)?.role;
-
-      const hasAdminPrivilege =
-        dbProf?.role === 'admin' ||
-        dbProf?.role === 'owner' ||
-        appMetaRole === 'admin' ||
-        appMetaRole === 'owner' ||
-        verifiedEmail === 'admin@jazelle.com';
-
-      if (!hasAdminPrivilege) {
-        setSession(null);
-        setUser(null);
-        setProfile(null);
-        setLoading(false);
-        return;
-      }
-
-      const resolvedProfile: Profile = dbProf || {
-        id: userCheck.user.id,
-        email: verifiedEmail,
-        role: verifiedEmail === 'admin@jazelle.com' ? 'owner' : 'admin',
-        display_name:
-          (userCheck.user.user_metadata?.full_name as string | undefined) ||
-          (verifiedEmail === 'admin@jazelle.com' ? 'Store Owner' : verifiedEmail.split('@')[0]),
-      };
-
-      setSession(sess);
-      setUser(userCheck.user);
-      setProfile(resolvedProfile);
-      setLoading(false);
     };
 
-    rawSupabaseClient.auth.getSession().then(({ data }) => {
-      void verifyAndApplySession(data.session);
+    hydrateSession();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (event, nextSession) => {
+      if (!isMountedRef.current) return;
+
+      if (event === 'SIGNED_OUT' || !nextSession?.user) {
+        setSession(null);
+        setUser(null);
+        setIsAdmin(false);
+        setLoading(false);
+        return;
+      }
+
+      const authorized = await verifyAdminAuthorization(nextSession.user);
+      if (!isMountedRef.current) return;
+
+      if (authorized) {
+        setSession(nextSession);
+        setUser(nextSession.user);
+        setIsAdmin(true);
+      } else {
+        setSession(null);
+        setUser(null);
+        setIsAdmin(false);
+      }
+      setLoading(false);
     });
 
-    const { data: listener } = rawSupabaseClient.auth.onAuthStateChange((_event, newSession) => {
-      void verifyAndApplySession(newSession);
-    });
-
-    return () => listener.subscription.unsubscribe();
+    return () => {
+      isMountedRef.current = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
-  const signIn = async (email: string, password: string): Promise<{ error: string | null }> => {
-    const rawEmail = (email || '').trim().toLowerCase();
+  const signIn = async (email: string, password: string) => {
+    const cleanEmail = email.trim().toLowerCase();
+    purgeLegacyMockSessions();
 
-    if (!rawEmail) {
-      return {
-        error: 'Please enter your administrator or store owner email.',
-      };
-    }
-
-    if (!password) {
-      return {
-        error: 'Please enter your password to sign in.',
-      };
-    }
-
-    // 1. Authoritative Database-Backed Rate Limit & Lockout Guard (Supabase PostgreSQL)
+    // Check database-backed rate limiter before attempting sign-in
     try {
-      const { data: lockoutCheck, error: rpcErr } = await rawSupabaseClient.rpc('check_admin_login_lockout', {
-        p_email: rawEmail,
+      const rateRes = await fetch('/api/auth/rate-limit-check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'admin_login', identifier: cleanEmail }),
       });
-
-      if (!rpcErr && lockoutCheck && typeof lockoutCheck === 'object') {
-        const check = lockoutCheck as {
-          locked?: boolean;
-          remaining_seconds?: number;
-          failed_attempts?: number;
-          message?: string;
+      if (rateRes.status === 429) {
+        const rateData = await rateRes.json().catch(() => ({}));
+        return {
+          error: new Error(
+            rateData.error || 'Too many failed login attempts. Please wait 15 minutes before trying again.'
+          ),
         };
-        if (check.locked) {
-          return {
-            error:
-              check.message ||
-              `Too many failed login attempts (${check.failed_attempts || 5}/5). Account locked for ${check.remaining_seconds || 900} seconds.`,
-          };
-        }
-      } else {
-        const fifteenMinsAgo = new Date(Date.now() - 15 * 60 * 1000).toISOString();
-        const { data: recentAttempts } = await rawSupabaseClient
-          .from('admin_login_attempts')
-          .select('id, attempted_at')
-          .eq('email', rawEmail)
-          .eq('success', false)
-          .gte('attempted_at', fifteenMinsAgo);
-
-        if (recentAttempts && recentAttempts.length >= 5) {
-          return {
-            error: 'Too many failed login attempts recorded in database. Account locked for 15 minutes for security.',
-          };
-        }
       }
-    } catch (checkErr) {
-      console.warn('[Admin Auth] Database lockout check notice:', checkErr);
+    } catch {
+      // Do not block if local express endpoint is unreachable
     }
 
-    // 2. Strictly authenticate with real, unproxied Supabase Auth (rawSupabaseClient.auth.signInWithPassword)
     try {
-      const { data: authData, error: authError } = await rawSupabaseClient.auth.signInWithPassword({
-        email: rawEmail,
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: cleanEmail,
         password,
       });
 
-      // Handle the SQL-seeded admin@jazelle.com row where NULL token columns in auth.users
-      // cause GoTrue to return "Database error querying schema".
-      // Strictly require BOTH email === 'admin@jazelle.com' AND exact password === 'admin123'.
-      if (
-        authError &&
-        authError.message?.toLowerCase().includes('database error querying schema') &&
-        rawEmail === 'admin@jazelle.com' &&
-        password === 'admin123'
-      ) {
-        const ownerUser = {
-          id: '00000000-0000-4000-a000-000000000001',
-          aud: 'authenticated',
-          role: 'authenticated',
-          email: 'admin@jazelle.com',
-          email_confirmed_at: new Date().toISOString(),
-          app_metadata: { provider: 'email', role: 'owner' },
-          user_metadata: { full_name: 'Store Owner' },
-          identities: [],
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        } as unknown as User;
-
-        const ownerSession: Session = {
-          access_token: `verified-admin-jwt-${Date.now()}`,
-          refresh_token: `verified-admin-refresh-${Date.now()}`,
-          expires_in: 86400,
-          expires_at: Math.floor(Date.now() / 1000) + 86400,
-          token_type: 'bearer',
-          user: ownerUser,
+      if (error || !data.session || !data.user) {
+        return {
+          error: new Error(error?.message || 'Invalid login credentials. Access denied.'),
         };
-
-        const ownerProfile: Profile = {
-          id: ownerUser.id,
-          email: 'admin@jazelle.com',
-          role: 'owner',
-          display_name: 'Store Owner',
-        };
-
-        try {
-          sessionStorage.setItem(
-            VERIFIED_ADMIN_STORAGE_KEY,
-            JSON.stringify({ session: ownerSession, user: ownerUser, profile: ownerProfile })
-          );
-        } catch {
-          // ignore
-        }
-
-        setSession(ownerSession);
-        setUser(ownerUser);
-        setProfile(ownerProfile);
-        return { error: null };
       }
 
-      // Reject immediately if Supabase returns ANY error or if no valid session/access_token is returned
-      if (
-        authError ||
-        !authData?.session ||
-        !authData.session.access_token ||
-        authData.session.access_token === 'mock-token' ||
-        !authData?.user?.id
-      ) {
-        try {
-          const { error: recordErr } = await rawSupabaseClient.rpc('record_admin_login_attempt', {
-            p_email: rawEmail,
-            p_success: false,
-            p_ip: '',
-          });
-          if (recordErr) {
-            await rawSupabaseClient.from('admin_login_attempts').insert({
-              email: rawEmail,
-              success: false,
-              attempted_at: new Date().toISOString(),
-            });
-          }
-        } catch {
-          void rawSupabaseClient.from('admin_login_attempts').insert({
-            email: rawEmail,
-            success: false,
-            attempted_at: new Date().toISOString(),
-          });
-        }
-
+      const authorized = await verifyAdminAuthorization(data.user);
+      if (!authorized) {
+        await supabase.auth.signOut();
         setSession(null);
         setUser(null);
-        setProfile(null);
-
+        setIsAdmin(false);
         return {
-          error: formatAuthErrorMessage(authError?.message),
+          error: new Error('Access denied: This account does not have administrator privileges.'),
         };
       }
 
-      // 3. Cryptographically verify the returned JWT with Supabase Auth server
-      const { data: verifiedUserData, error: verifyError } = await rawSupabaseClient.auth.getUser(
-        authData.session.access_token
-      );
-
-      if (verifyError || !verifiedUserData?.user || verifiedUserData.user.id !== authData.user.id) {
-        await rawSupabaseClient.auth.signOut();
-        setSession(null);
-        setUser(null);
-        setProfile(null);
-        return {
-          error: formatAuthErrorMessage(verifyError?.message),
-        };
-      }
-
-      // 4. Verify the authenticated Supabase user has administrator or store owner role
-      const verifiedEmail = (verifiedUserData.user.email || '').toLowerCase();
-      const prof = await fetchProfileFromSupabase(verifiedUserData.user.id);
-      const appMetaRole = (verifiedUserData.user.app_metadata as Record<string, unknown> | undefined)?.role;
-
-      const isAuthorized =
-        prof?.role === 'admin' ||
-        prof?.role === 'owner' ||
-        appMetaRole === 'admin' ||
-        appMetaRole === 'owner' ||
-        verifiedEmail === 'admin@jazelle.com';
-
-      if (!isAuthorized) {
-        await rawSupabaseClient.auth.signOut();
-        setSession(null);
-        setUser(null);
-        setProfile(null);
-        return {
-          error: 'Access denied: Your account does not have administrator privileges.',
-        };
-      }
-
-      // 5. Record successful login in PostgreSQL to clear prior failed attempts
-      try {
-        const { error: clearErr } = await rawSupabaseClient.rpc('record_admin_login_attempt', {
-          p_email: rawEmail,
-          p_success: true,
-          p_ip: '',
-        });
-        if (clearErr) {
-          await rawSupabaseClient.from('admin_login_attempts').delete().eq('email', rawEmail);
-        }
-      } catch {
-        void rawSupabaseClient.from('admin_login_attempts').delete().eq('email', rawEmail);
-      }
-
-      const activeProf: Profile = prof || {
-        id: verifiedUserData.user.id,
-        email: verifiedEmail,
-        role: verifiedEmail === 'admin@jazelle.com' ? 'owner' : 'admin',
-        display_name: verifiedEmail === 'admin@jazelle.com' ? 'Store Owner' : verifiedEmail.split('@')[0],
-      };
-
-      setSession(authData.session);
-      setUser(verifiedUserData.user);
-      setProfile(activeProf);
-
+      setSession(data.session);
+      setUser(data.user);
+      setIsAdmin(true);
       return { error: null };
     } catch (err: unknown) {
-      setSession(null);
-      setUser(null);
-      setProfile(null);
-      const msg = err instanceof Error ? err.message : '';
-      return { error: formatAuthErrorMessage(msg) };
+      const message = err instanceof Error ? err.message : 'Authentication failed';
+      return { error: new Error(message) };
     }
   };
 
   const signOut = async () => {
+    purgeLegacyMockSessions();
     try {
-      sessionStorage.removeItem(VERIFIED_ADMIN_STORAGE_KEY);
-      sessionStorage.removeItem('jazelle_admin_session');
-      localStorage.removeItem('jazelle_admin_session');
-      localStorage.removeItem('jazelle_mock_session');
-      await rawSupabaseClient.auth.signOut();
-    } catch {
-      // ignore
+      await supabase.auth.signOut();
+    } catch (err) {
+      console.error('[AdminAuth] Error signing out:', err);
+    } finally {
+      setSession(null);
+      setUser(null);
+      setIsAdmin(false);
     }
-    setUser(null);
-    setSession(null);
-    setProfile(null);
   };
 
-  // Strictly require an active, verified Supabase session AND user with admin/owner privilege
-  const isAdmin = Boolean(
-    user &&
-      session &&
-      session.access_token &&
-      session.access_token !== 'mock-token' &&
-      (profile?.role === 'admin' ||
-        profile?.role === 'owner' ||
-        user.email?.toLowerCase() === 'admin@jazelle.com')
-  );
-
   return (
-    <AdminAuthContext.Provider value={{ user, session, profile, loading, isAdmin, signIn, signOut }}>
+    <AdminAuthContext.Provider value={{ session, user, isAdmin, loading, signIn, signOut }}>
       {children}
     </AdminAuthContext.Provider>
   );
-}
+};
 
-export function useAdminAuth(): AdminAuthValue {
-  const ctx = useContext(AdminAuthContext);
-  if (!ctx) throw new Error('useAdminAuth must be used inside AdminAuthProvider');
-  return ctx;
-}
+export const useAdminAuth = () => useContext(AdminAuthContext);

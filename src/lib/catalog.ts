@@ -183,23 +183,9 @@ export function dbProductToProduct(row: Record<string, unknown>): Product {
 }
 
 export function getStoredProducts(): Product[] {
-  try {
-    const raw = typeof window !== 'undefined' ? localStorage.getItem('jazelle_db_products') : null;
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed.map(dbProductToProduct);
-      }
-    }
-  } catch {
-    // fallback
-  }
   return PRODUCTS;
 }
 
 export function getProduct(slug: string): Product | undefined {
-  const stored = getStoredProducts();
-  const foundInStored = stored.find((product) => product.slug === slug);
-  if (foundInStored) return foundInStored;
   return PRODUCTS.find((product) => product.slug === slug);
 }

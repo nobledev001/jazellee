@@ -53,10 +53,28 @@ export default function Hero() {
     'Skincare, body care & little things that make you feel good. Thoughtfully picked for the modern Nigerian woman — soft, warm, and made for you.'
   );
   const ctaPrimaryLabel = getSetting('hero_cta_primary_label', 'Shop Now');
-  const ctaPrimaryLink = getSetting('hero_cta_primary_link', '/shop');
+  const rawPrimaryLink = getSetting('hero_cta_primary_link', '/shop');
   const ctaSecondaryLabel = getSetting('hero_cta_secondary_label', 'Explore Self-Care');
-  const ctaSecondaryLink = getSetting('hero_cta_secondary_link', '/categories/self-care');
+  const rawSecondaryLink = getSetting('hero_cta_secondary_link', '/about');
   const socialProofText = getSetting('hero_social_proof', 'Loved by 500+ women across Nigeria');
+
+  const normalizeLink = (link: string, fallback: string) => {
+    const trimmed = (link || '').trim();
+    if (!trimmed) return fallback;
+    if (
+      trimmed.startsWith('/') ||
+      trimmed.startsWith('http://') ||
+      trimmed.startsWith('https://') ||
+      trimmed.startsWith('#') ||
+      trimmed.startsWith('mailto:')
+    ) {
+      return trimmed;
+    }
+    return `/${trimmed}`;
+  };
+
+  const ctaPrimaryLink = normalizeLink(rawPrimaryLink, '/shop');
+  const ctaSecondaryLink = normalizeLink(rawSecondaryLink, '/about');
 
   useEffect(() => {
     const timer = setInterval(() => {

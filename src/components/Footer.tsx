@@ -51,26 +51,38 @@ export default function Footer() {
   const [email, setEmail] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [subscribed, setSubscribed] = useState(false);
+  const [subscribeError, setSubscribeError] = useState<string | null>(null);
 
   const handleSubscribe = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email.trim() || submitting) return;
 
     setSubmitting(true);
+    setSubscribeError(null);
+    setSubscribed(false);
+
     try {
-      await supabase.from('newsletter_subscribers').insert({
+      const { error } = await supabase.from('newsletter_subscribers').insert({
         email: email.trim().toLowerCase(),
         source: 'footer_newsletter',
         created_at: new Date().toISOString(),
       });
-    } catch {
-      // ignore
-    }
 
-    setSubscribed(true);
-    setSubmitting(false);
-    setEmail('');
-    setTimeout(() => setSubscribed(false), 5000);
+      if (error && error.code !== '23505') {
+        setSubscribeError(`Subscription failed: ${error.message}`);
+        setSubmitting(false);
+        return;
+      }
+
+      setSubscribed(true);
+      setSubmitting(false);
+      setEmail('');
+      setTimeout(() => setSubscribed(false), 5000);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Unable to subscribe right now.';
+      setSubscribeError(`Subscription failed: ${msg}`);
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -123,6 +135,11 @@ export default function Footer() {
             {subscribed && (
               <p className="mt-3 text-sm text-sage-600 font-medium animate-fade-in-down">
                 You're on the list! Check your inbox for sweet self-care love from us.
+              </p>
+            )}
+            {subscribeError && (
+              <p className="mt-3 text-sm text-blush-600 font-medium animate-fade-in-down">
+                {subscribeError}
               </p>
             )}
           </div>

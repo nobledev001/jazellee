@@ -1,301 +1,236 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 
-export const SETTINGS_CACHE_KEY = 'jazelle_site_settings_cache';
-
-// Built-in site-wide defaults
-export const DEFAULT_SITE_SETTINGS: Record<string, string> = {
-  // Announcements & Top Bar
-  announcement_bar: 'Free delivery on orders over ₦40,000 — across Nigeria ✨',
-  free_delivery_threshold: '40000',
-
+export interface SiteSettings {
   // Hero Section
+  hero_badge: string;
+  hero_headline: string;
+  hero_subtitle: string;
+  hero_cta_primary_label: string;
+  hero_cta_primary_link: string;
+  hero_cta_secondary_label: string;
+  hero_cta_secondary_link: string;
+  hero_social_proof: string;
+
+  // Countdown Banner
+  countdown_enabled: string;
+  countdown_target_date: string;
+  countdown_headline: string;
+  countdown_subtitle: string;
+  countdown_post_launch_headline: string;
+  countdown_post_launch_subtitle: string;
+
+  // About / Founder Section
+  about_headline: string;
+  about_story_p1: string;
+  about_story_p2: string;
+  about_founder_name: string;
+  about_founder_title: string;
+  about_founder_quote: string;
+
+  // Homepage Sections
+  bestsellers_title: string;
+  bestsellers_subtitle: string;
+  categories_title: string;
+  categories_subtitle: string;
+  testimonials_title: string;
+  testimonials_subtitle: string;
+
+  // Store & Contact Info
+  announcement_bar: string;
+  whatsapp_number: string;
+  support_email: string;
+  instagram_handle: string;
+  tiktok_handle: string;
+  store_location: string;
+  free_delivery_threshold: string;
+  [key: string]: string;
+}
+
+export const DEFAULT_SITE_SETTINGS: SiteSettings = {
   hero_badge: 'Now delivering across Nigeria',
   hero_headline: 'Your little self-care haven',
   hero_subtitle:
-    'Skincare, body care & little things that make you feel good. Thoughtfully picked for the modern Nigerian woman — soft, warm, and made for you.',
+    'Skincare, body care & little things that make you feel good — curated with love for Nigerian women.',
   hero_cta_primary_label: 'Shop Now',
   hero_cta_primary_link: '/shop',
   hero_cta_secondary_label: 'Explore Self-Care',
   hero_cta_secondary_link: '/categories/self-care',
   hero_social_proof: 'Loved by 500+ women across Nigeria',
 
-  // Countdown & Flash Sale Banner
   countdown_enabled: 'true',
-  countdown_mode: 'launch', // 'launch' | 'flash_sale'
+  countdown_target_date: '2025-07-01T00:00:00+01:00',
   countdown_headline: 'Our full shop goes live soon',
-  countdown_subtext: 'Counting down to something special. In the meantime, explore our preview collection.',
-  countdown_target_date: '2026-10-10T00:00:00',
-  countdown_live_headline: "We're live!",
-  countdown_live_subtext:
-    'The Jazelle Skin Haven shop is officially open. Come explore our full collection of self-care favourites.',
+  countdown_subtitle:
+    'Waitlist members get 24-hour early access and a special launch gift on opening day.',
+  countdown_post_launch_headline: 'Waitlist is now open for our next restock drop',
+  countdown_post_launch_subtitle:
+    'Join the inner circle for first dibs on limited-batch body oils and new arrivals.',
 
-  // About Page & Founder Story
-  about_hero_title: 'Welcome to the haven',
-  about_hero_subtitle: 'A warm, gentle corner built for your skincare journey in Nigeria.',
-  founder_greeting: 'Hi, I’m Jazelle — and this is my little corner for you.',
-  founder_intro:
-    'What started as a personal obsession with soft, happy skin in the Nigerian climate turned into a dream to build something gentle, warm, and welcoming for every woman who wants to care for herself.',
-  founder_image_url:
-    'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=800&auto=format&fit=crop&q=80',
-  founder_quote: 'Skincare shouldn’t feel intimidating or overwhelming. It should feel like coming home to yourself.',
+  about_headline: 'Thoughtfully chosen for everyday softness',
+  about_story_p1:
+    'Jazelle started with a simple wish: to make shopping for skincare and body care in Nigeria feel calm, trustworthy, and genuinely joyful.',
+  about_story_p2:
+    'Instead of overwhelming you with hundreds of confusing bottles, we curate gentle, effective favourites that fit into real routines and real Abuja & Lagos weather.',
+  about_founder_name: 'Jazelle',
+  about_founder_title: 'Founder & Curator',
+  about_founder_quote: 'Self-care does not have to be complicated to feel special.',
 
-  // Homepage Sections
-  need_help_headline: 'Need Help Choosing?',
-  need_help_subtext:
-    'Not sure what your skin needs? Chat with our team for personalised routine recommendations via WhatsApp.',
-  need_help_button: 'Chat with us on WhatsApp',
-  follow_haven_headline: 'Follow the Haven',
-  follow_haven_subtext: 'Daily rituals, product tips, and behind-the-scenes on our Instagram.',
-  newsletter_headline: 'Join the Haven Letter',
-  newsletter_subtext:
-    'Gentle skin tips, secret restocks, and a warm welcome note. Never spam, just genuine love.',
+  bestsellers_title: 'Most-loved right now',
+  bestsellers_subtitle: 'Customer Favourites',
+  categories_title: 'What are you in the mood for?',
+  categories_subtitle: 'Shop by Category',
+  testimonials_title: 'Sweet words from the Haven',
+  testimonials_subtitle: 'Real Customer Love',
 
-  // Store & Contact Info
-  support_phone: '+234 812 345 6789',
-  support_email: 'hello@jazelleskinhaven.com',
-  store_address: 'Wuse II, Abuja, Nigeria',
-  instagram_handle: '@jazelle.skin.haven',
-  instagram_url: 'https://www.instagram.com/jazelle.skin.haven',
+  announcement_bar: '✨ Free delivery on orders over ₦35,000 • Nationwide shipping across Nigeria',
+  whatsapp_number: '2348000000000',
+  support_email: 'hello@jazelle.ng',
+  instagram_handle: '@jazelleskinhaven',
   tiktok_handle: '@jazelleskinhaven',
-  tiktok_url: 'https://www.tiktok.com/@jazelleskinhaven',
-  whatsapp_url: 'https://wa.me/message/ET5GM7MR4LYIC1',
-  whatsapp_number: '+2348123456789',
-  delivery_lagos_fee: '2500',
-  delivery_national_fee: '4500',
+  store_location: 'Abuja, Nigeria (Nationwide Delivery)',
+  free_delivery_threshold: '35000',
 };
 
-export function getInitialSettings(): Record<string, string> {
-  if (typeof window === 'undefined') return { ...DEFAULT_SITE_SETTINGS };
-  try {
-    const cached = localStorage.getItem(SETTINGS_CACHE_KEY);
-    if (cached) {
-      return { ...DEFAULT_SITE_SETTINGS, ...JSON.parse(cached) };
-    }
-  } catch {
-    // ignore local storage errors
-  }
-  return { ...DEFAULT_SITE_SETTINGS };
-}
-
-export interface SiteSettingsContextValue {
-  settings: Record<string, string>;
+interface SiteSettingsContextValue {
+  settings: SiteSettings;
   loading: boolean;
   getSetting: (key: string, fallback?: string) => string;
-  updateSetting: (key: string, value: string) => Promise<boolean>;
-  updateMultipleSettings: (entries: Record<string, string>) => Promise<boolean>;
-  refresh: () => Promise<void>;
+  refreshSettings: () => Promise<void>;
+  updateSettingLocally: (key: string, value: string) => void;
+  updateMultipleSettingsLocally: (updates: Record<string, string>) => void;
 }
 
-const SiteSettingsContext = createContext<SiteSettingsContextValue | null>(null);
+const SiteSettingsContext = createContext<SiteSettingsContextValue>({
+  settings: DEFAULT_SITE_SETTINGS,
+  loading: false,
+  getSetting: (key: string, fallback?: string) =>
+    DEFAULT_SITE_SETTINGS[key] !== undefined ? DEFAULT_SITE_SETTINGS[key] : fallback ?? '',
+  refreshSettings: async () => {},
+  updateSettingLocally: () => {},
+  updateMultipleSettingsLocally: () => {},
+});
 
-export function SiteSettingsProvider({ children }: { children: React.ReactNode }) {
-  const [settings, setSettings] = useState<Record<string, string>>(getInitialSettings);
-  const [loading, setLoading] = useState(false);
+export const SiteSettingsProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  const [settings, setSettings] = useState<SiteSettings>(DEFAULT_SITE_SETTINGS);
+  const [loading, setLoading] = useState(true);
 
-  const fetchLatestSettings = useCallback(async () => {
+  const refreshSettings = useCallback(async () => {
     try {
       const { data, error } = await supabase.from('site_settings').select('key, value');
       if (!error && data && data.length > 0) {
-        const mapped: Record<string, string> = {};
-        data.forEach((row) => {
+        const dbMap: Record<string, string> = {};
+        data.forEach((row: { key: string; value: string }) => {
           if (row.key && row.value !== undefined && row.value !== null) {
-            mapped[row.key] = String(row.value);
+            dbMap[row.key] = String(row.value);
           }
         });
 
-        setSettings((prev) => {
-          const merged = { ...prev, ...mapped };
-          try {
-            localStorage.setItem(SETTINGS_CACHE_KEY, JSON.stringify(merged));
-          } catch {
-            // ignore quota
-          }
-          return merged;
-        });
+        const merged: SiteSettings = {
+          ...DEFAULT_SITE_SETTINGS,
+          ...dbMap,
+        };
+        setSettings(merged);
       }
-    } catch (err) {
-      console.warn('[SiteSettings] Load notice:', err);
+    } catch {
+      // Fall back to in-memory defaults
+    } finally {
+      setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    fetchLatestSettings();
+    refreshSettings();
 
-    // Single realtime channel with unique name to prevent any collisions
-    const channelId = `site_settings_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    let channel: unknown = null;
-    if (typeof supabase?.channel === 'function') {
-      try {
+    // Real-time subscription to site_settings changes
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    try {
+      if (typeof supabase.channel === 'function') {
         channel = supabase
-          .channel(channelId)
+          .channel('public:site_settings_changes')
           .on(
             'postgres_changes',
             { event: '*', schema: 'public', table: 'site_settings' },
             () => {
-              fetchLatestSettings();
+              refreshSettings();
             }
           )
           .subscribe();
-      } catch (err) {
-        console.warn('[SiteSettings] Realtime subscription init notice:', err);
       }
+    } catch {
+      // Ignore realtime channel errors
     }
 
-    // Window event listener for instant local updates across tabs or admin updates
-    const onLocalUpdate = (e: Event) => {
+    const handleCustomUpdate = (e: Event) => {
       const customEvent = e as CustomEvent<Record<string, string>>;
       if (customEvent.detail) {
-        setSettings((prev) => ({ ...prev, ...customEvent.detail }));
+        setSettings((prev) => ({
+          ...prev,
+          ...customEvent.detail,
+        }));
       } else {
-        fetchLatestSettings();
+        refreshSettings();
       }
     };
-    window.addEventListener('jazelle_settings_updated', onLocalUpdate);
+
+    window.addEventListener('jazelle_settings_updated', handleCustomUpdate);
 
     return () => {
-      if (channel && typeof supabase?.removeChannel === 'function') {
+      if (channel && typeof supabase.removeChannel === 'function') {
         try {
-          void supabase.removeChannel(channel as Parameters<typeof supabase.removeChannel>[0]);
+          supabase.removeChannel(channel);
         } catch {
           // ignore
         }
       }
-      window.removeEventListener('jazelle_settings_updated', onLocalUpdate);
+      window.removeEventListener('jazelle_settings_updated', handleCustomUpdate);
     };
-  }, [fetchLatestSettings]);
+  }, [refreshSettings]);
+
+  const updateSettingLocally = useCallback((key: string, value: string) => {
+    setSettings((prev) => {
+      const next = { ...prev, [key]: value };
+      window.dispatchEvent(new CustomEvent('jazelle_settings_updated', { detail: { [key]: value } }));
+      return next;
+    });
+  }, []);
+
+  const updateMultipleSettingsLocally = useCallback((updates: Record<string, string>) => {
+    setSettings((prev) => {
+      const next = { ...prev, ...updates };
+      window.dispatchEvent(new CustomEvent('jazelle_settings_updated', { detail: updates }));
+      return next;
+    });
+  }, []);
 
   const getSetting = useCallback(
     (key: string, fallback?: string): string => {
-      if (settings[key] !== undefined && settings[key] !== '') {
-        return settings[key];
+      const val = settings[key];
+      if (val !== undefined && val !== '') {
+        return val;
       }
-      if (DEFAULT_SITE_SETTINGS[key] !== undefined) {
-        return DEFAULT_SITE_SETTINGS[key];
+      if (fallback !== undefined) {
+        return fallback;
       }
-      return fallback ?? '';
+      return DEFAULT_SITE_SETTINGS[key] ?? '';
     },
     [settings]
   );
 
-  const updateSetting = useCallback(
-    async (key: string, value: string): Promise<boolean> => {
-      setLoading(true);
-      try {
-        const { error } = await supabase.from('site_settings').upsert(
-          {
-            key,
-            value,
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: 'key' }
-        );
-
-        if (error) throw error;
-
-        setSettings((prev) => {
-          const next = { ...prev, [key]: value };
-          try {
-            localStorage.setItem(SETTINGS_CACHE_KEY, JSON.stringify(next));
-          } catch {
-            // quota
-          }
-          return next;
-        });
-
-        window.dispatchEvent(
-          new CustomEvent('jazelle_settings_updated', { detail: { [key]: value } })
-        );
-
-        return true;
-      } catch (err) {
-        console.error('[SiteSettings] Failed to update setting:', err);
-        return false;
-      } finally {
-        setLoading(false);
-      }
-    },
-    []
+  return (
+    <SiteSettingsContext.Provider
+      value={{
+        settings,
+        loading,
+        getSetting,
+        refreshSettings,
+        updateSettingLocally,
+        updateMultipleSettingsLocally,
+      }}
+    >
+      {children}
+    </SiteSettingsContext.Provider>
   );
+};
 
-  const updateMultipleSettings = useCallback(
-    async (entries: Record<string, string>): Promise<boolean> => {
-      setLoading(true);
-      try {
-        const rows = Object.entries(entries).map(([key, value]) => ({
-          key,
-          value,
-          updated_at: new Date().toISOString(),
-        }));
-
-        const { error } = await supabase
-          .from('site_settings')
-          .upsert(rows, { onConflict: 'key' });
-
-        if (error) throw error;
-
-        setSettings((prev) => {
-          const next = { ...prev, ...entries };
-          try {
-            localStorage.setItem(SETTINGS_CACHE_KEY, JSON.stringify(next));
-          } catch {
-            // quota
-          }
-          return next;
-        });
-
-        window.dispatchEvent(
-          new CustomEvent('jazelle_settings_updated', { detail: entries })
-        );
-
-        return true;
-      } catch (err) {
-        console.error('[SiteSettings] Failed to save multiple settings:', err);
-        return false;
-      } finally {
-        setLoading(false);
-      }
-    },
-    []
-  );
-
-  const value = useMemo<SiteSettingsContextValue>(
-    () => ({
-      settings,
-      loading,
-      getSetting,
-      updateSetting,
-      updateMultipleSettings,
-      refresh: fetchLatestSettings,
-    }),
-    [settings, loading, getSetting, updateSetting, updateMultipleSettings, fetchLatestSettings]
-  );
-
-  return <SiteSettingsContext.Provider value={value}>{children}</SiteSettingsContext.Provider>;
-}
-
-export function useSiteSettings(): SiteSettingsContextValue {
-  const context = useContext(SiteSettingsContext);
-  if (context) {
-    return context;
-  }
-
-  // Safe fallback if called outside provider: read from local cache without setting up rogue channels
-  const initial = getInitialSettings();
-  return {
-    settings: initial,
-    loading: false,
-    getSetting: (key: string, fallback?: string) => {
-      if (initial[key] !== undefined && initial[key] !== '') {
-        return initial[key];
-      }
-      if (DEFAULT_SITE_SETTINGS[key] !== undefined) {
-        return DEFAULT_SITE_SETTINGS[key];
-      }
-      return fallback ?? '';
-    },
-    updateSetting: async () => false,
-    updateMultipleSettings: async () => false,
-    refresh: async () => {},
-  };
-}
+export const useSiteSettings = () => useContext(SiteSettingsContext);

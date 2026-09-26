@@ -7,6 +7,7 @@ import Hero from '@/components/Hero';
 import Countdown from '@/components/Countdown';
 import JazellePicks from '@/components/JazellePicks';
 import ShopByConcern from '@/components/ShopByConcern';
+import Testimonials from '@/components/Testimonials';
 import NeedHelpChoosing from '@/components/NeedHelpChoosing';
 import FollowTheHaven from '@/components/FollowTheHaven';
 import WhatsAppButton from '@/components/WhatsAppButton';
@@ -38,6 +39,7 @@ function HomePage() {
       <Countdown />
       <JazellePicks />
       <ShopByConcern />
+      <Testimonials />
       <NeedHelpChoosing />
       <FollowTheHaven />
     </>

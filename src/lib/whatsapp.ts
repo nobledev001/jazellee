@@ -1,26 +1,25 @@
-export const OFFICIAL_WHATSAPP_LINK = 'https://wa.me/message/ET5GM7MR4LYIC1';
-export const DEFAULT_WHATSAPP_NUMBER = '2348123456789';
+// WhatsApp helper — builds click-to-chat URLs with pre-filled messages
 
-export function getWhatsAppNumber(): string {
-  if (typeof window !== 'undefined') {
-    try {
-      const cached = localStorage.getItem('jazelle_site_settings_cache');
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        if (parsed.whatsapp_number) {
-          return String(parsed.whatsapp_number).replace(/[^0-9]/g, '');
-        }
-      }
-    } catch {
-      // fallback
-    }
-  }
+const DEFAULT_WHATSAPP_NUMBER = '2348000000000';
+
+export function getActiveWhatsAppNumber(): string {
   return DEFAULT_WHATSAPP_NUMBER;
 }
 
-export function getWhatsAppLink(message?: string): string {
-  if (message) {
-    return `${OFFICIAL_WHATSAPP_LINK}?text=${encodeURIComponent(message)}`;
-  }
-  return OFFICIAL_WHATSAPP_LINK;
+export function getWhatsAppLink(message?: string, customNumber?: string): string {
+  const baseNumber = (customNumber || getActiveWhatsAppNumber()).replace(/[^0-9]/g, '');
+  const base = `https://wa.me/${baseNumber}`;
+  if (!message) return base;
+  return `${base}?text=${encodeURIComponent(message)}`;
 }
+
+export const WHATSAPP_MESSAGES = {
+  general: 'Hi Jazelle! I visited your website and would love some help choosing products.',
+  orderHelp: (orderId: string) =>
+    `Hi Jazelle! I need help with my order #${orderId}. Can you assist me?`,
+  productInquiry: (productName: string) =>
+    `Hi Jazelle! I have a question about the ${productName}. Is it currently available?`,
+  skincareAdvice:
+    "Hi Jazelle! I'm not sure what products are best for my skin type. Can you help me pick a routine?",
+  deliveryQuestion: 'Hi Jazelle! I have a question about delivery to my area.',
+};

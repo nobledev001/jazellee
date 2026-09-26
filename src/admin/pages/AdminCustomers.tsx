@@ -18,59 +18,6 @@ import {
 } from 'lucide-react';
 import { supabase, type Profile, type DbOrder } from '../supabase';
 
-const SEED_CUSTOMERS: Profile[] = [
-  {
-    id: '00000000-0000-4000-a000-000000000001',
-    email: 'admin@jazelle.com',
-    role: 'owner',
-    display_name: 'Store Owner',
-    phone: '+234 812 345 6789',
-    created_at: '2025-01-10T09:00:00.000Z',
-    orders_count: 0,
-    total_spent: 0,
-  },
-  {
-    id: '11111111-1111-4111-a111-111111111111',
-    email: 'fawazakorede001@gmail.com',
-    role: 'customer',
-    display_name: 'Fawaz Akorede',
-    phone: '+234 803 123 4567',
-    created_at: '2025-02-14T11:20:00.000Z',
-    orders_count: 2,
-    total_spent: 72000,
-  },
-  {
-    id: '22222222-2222-4222-a222-222222222222',
-    email: 'amaka.okafor@gmail.com',
-    role: 'customer',
-    display_name: 'Amaka Okafor',
-    phone: '+234 802 987 6543',
-    created_at: '2025-02-18T14:22:00.000Z',
-    orders_count: 3,
-    total_spent: 98500,
-  },
-  {
-    id: '33333333-3333-4333-a333-333333333333',
-    email: 'kemi.adeyemi@yahoo.com',
-    role: 'customer',
-    display_name: 'Kemi Adeyemi',
-    phone: '+234 814 555 0192',
-    created_at: '2025-03-01T10:15:00.000Z',
-    orders_count: 1,
-    total_spent: 28000,
-  },
-  {
-    id: '44444444-4444-4444-a444-444444444444',
-    email: 'zainab.bello@outlook.com',
-    role: 'customer',
-    display_name: 'Zainab Bello',
-    phone: '+234 701 444 8821',
-    created_at: '2025-03-05T16:40:00.000Z',
-    orders_count: 1,
-    total_spent: 34500,
-  },
-];
-
 export default function AdminCustomers() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [search, setSearch] = useState('');
@@ -98,53 +45,7 @@ export default function AdminCustomers() {
 
       const customerMap = new Map<string, Profile>();
 
-      // A. Populate seed customers first as reliable baseline
-      for (const sc of SEED_CUSTOMERS) {
-        customerMap.set(sc.email.toLowerCase(), { ...sc });
-      }
-
-      // B. Incorporate localStorage registered customers
-      try {
-        const rawReg = localStorage.getItem('jazelle_registered_customers');
-        if (rawReg) {
-          const regList: Profile[] = JSON.parse(rawReg);
-          for (const reg of regList) {
-            if (reg.email) {
-              const emailKey = reg.email.toLowerCase();
-              const existing = customerMap.get(emailKey);
-              customerMap.set(emailKey, {
-                ...existing,
-                ...reg,
-                id: reg.id || existing?.id || `cust-reg-${Date.now()}`,
-                role: emailKey === 'admin@jazelle.com' ? 'owner' : (reg.role || existing?.role || 'customer'),
-                display_name: reg.display_name || existing?.display_name || reg.email.split('@')[0],
-              });
-            }
-          }
-        }
-
-        const rawDbProf = localStorage.getItem('jazelle_db_profiles');
-        if (rawDbProf) {
-          const dbList: Profile[] = JSON.parse(rawDbProf);
-          for (const p of dbList) {
-            if (p.email) {
-              const emailKey = p.email.toLowerCase();
-              const existing = customerMap.get(emailKey);
-              customerMap.set(emailKey, {
-                ...existing,
-                ...p,
-                id: p.id || existing?.id || `cust-prof-${Date.now()}`,
-                role: emailKey === 'admin@jazelle.com' ? 'owner' : (p.role || existing?.role || 'customer'),
-                display_name: p.display_name || existing?.display_name || p.email.split('@')[0],
-              });
-            }
-          }
-        }
-      } catch {
-        // storage parse error
-      }
-
-      // C. Merge records from cloud Supabase profiles table
+      // Merge records from cloud Supabase profiles table
       if (profilesRes.data && Array.isArray(profilesRes.data)) {
         for (const p of profilesRes.data as Profile[]) {
           if (p.email) {
@@ -155,7 +56,7 @@ export default function AdminCustomers() {
               ...p,
               id: p.id || existing?.id || `cust-${Date.now()}`,
               role: emailKey === 'admin@jazelle.com' ? 'owner' : (p.role || existing?.role || 'customer'),
-              display_name: p.display_name || existing?.display_name || p.email.split('@')[0],
+              display_name: p.display_name || (p as unknown as { full_name?: string }).full_name || existing?.display_name || p.email.split('@')[0],
             });
           }
         }
@@ -299,48 +200,10 @@ export default function AdminCustomers() {
       }
 
       if (rpcError) {
-        console.warn('[AdminCustomers] Note on set_user_role RPC response:', rpcError.message);
+        throw new Error(rpcError.message);
       }
 
-      // 2. Synchronize local storage to ensure instant UI reactivity and local session consistency
-      const emailKey = profile.email.toLowerCase();
-      try {
-        const rawProf = localStorage.getItem('jazelle_db_profiles');
-        const profList: Profile[] = rawProf ? JSON.parse(rawProf) : [];
-        const idx = profList.findIndex((p) => p.id === profile.id || p.email?.toLowerCase() === emailKey);
-        if (idx >= 0) {
-          profList[idx] = { ...profList[idx], role: targetRole, updated_at: new Date().toISOString() };
-        } else {
-          profList.push({ ...profile, role: targetRole, updated_at: new Date().toISOString() });
-        }
-        localStorage.setItem('jazelle_db_profiles', JSON.stringify(profList));
-      } catch {
-        // ignore
-      }
-
-      try {
-        const rawReg = localStorage.getItem('jazelle_registered_customers');
-        const regList: Profile[] = rawReg ? JSON.parse(rawReg) : [];
-        const rIdx = regList.findIndex((p) => p.id === profile.id || p.email?.toLowerCase() === emailKey);
-        if (rIdx >= 0) {
-          regList[rIdx] = { ...regList[rIdx], role: targetRole, updated_at: new Date().toISOString() };
-        } else {
-          regList.push({ ...profile, role: targetRole, updated_at: new Date().toISOString() });
-        }
-        localStorage.setItem('jazelle_registered_customers', JSON.stringify(regList));
-      } catch {
-        // ignore
-      }
-
-      // 3. Dispatch system events
-      window.dispatchEvent(
-        new CustomEvent('jazelle_customer_registered', {
-          detail: { id: profile.id, role: targetRole },
-        })
-      );
-      window.dispatchEvent(new CustomEvent('jazelle_db_change', { detail: { table: 'profiles' } }));
-
-      // 4. Refresh customer list immediately to reflect new role
+      // Refresh customer list immediately to reflect new role from Supabase
       await loadProfiles(false);
 
       const roleLabel = targetRole === 'admin' ? 'Administrator' : 'Customer';
