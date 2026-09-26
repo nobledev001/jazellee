@@ -76,8 +76,7 @@ export async function recordCustomerProfile(profile: {
 }) {
   const cleanEmail = profile.email?.trim().toLowerCase();
   if (!cleanEmail) return;
-  const fullName = profile.fullName?.trim() || cleanEmail.split('@')[0];
-  const role = cleanEmail === 'admin@jazelle.com' ? 'admin' : 'customer';
+  const displayName = profile.fullName?.trim() || cleanEmail.split('@')[0];
 
   const isUUID =
     Boolean(profile.id) &&
@@ -87,25 +86,24 @@ export async function recordCustomerProfile(profile: {
     return;
   }
 
-  const newProfile = {
-    id: profile.id,
-    email: cleanEmail,
-    full_name: fullName,
-    role,
-    phone: profile.phone || '',
-    updated_at: new Date().toISOString(),
-  };
-
-  try {
-    const { error } = await supabase.from('profiles').upsert(newProfile, { onConflict: 'id' });
-    if (error) {
-      console.error('[Auth] Supabase profiles upsert failed:', error.message);
+  // Note: public.profiles rows are created automatically by the on_auth_user_created
+  // trigger (handle_new_user), and authenticated users have UPDATE grant on display_name.
+  if (profile.fullName?.trim()) {
+    try {
+      await supabase
+        .from('profiles')
+        .update({ display_name: displayName })
+        .eq('id', profile.id);
+    } catch {
+      // Ignore transient network errors
     }
-  } catch (err) {
-    console.error('[Auth] Error upserting customer profile:', err);
   }
 
-  return newProfile;
+  return {
+    id: profile.id,
+    email: cleanEmail,
+    display_name: displayName,
+  };
 }
 
 interface AuthContextValue {
@@ -358,9 +356,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const updateProfile = async (data: { fullName?: string }) => {
-    const { error } = await rawSupabaseClient.auth.updateUser({
-      data: data.fullName ? { full_name: data.fullName } : undefined,
+    const trimmedName = data.fullName?.trim();
+    const { data: authData, error } = await rawSupabaseClient.auth.updateUser({
+      data: trimmedName ? { full_name: trimmedName } : undefined,
     });
+    if (!error && authData?.user) {
+      setUser(authData.user);
+      if (trimmedName) {
+        await supabase
+          .from('profiles')
+          .update({ display_name: trimmedName })
+          .eq('id', authData.user.id);
+      }
+    }
     return { error: error?.message ?? null };
   };
 

@@ -130,6 +130,13 @@ function AppContent() {
     return <AdminApp />;
   }
 
+  const hideFooter =
+    path === '/account' ||
+    path.startsWith('/account/') ||
+    path === '/login' ||
+    path === '/signup' ||
+    path === '/forgot-password';
+
   return (
     <>
       {showSplash && <SplashScreen onComplete={() => setShowSplash(false)} />}
@@ -138,7 +145,7 @@ function AppContent() {
         <main className="flex-1">
           <Routes />
         </main>
-        <Footer />
+        {!hideFooter && <Footer />}
         <WhatsAppButton />
       </div>
     </>
