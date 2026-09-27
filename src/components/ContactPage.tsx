@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { MessageCircle, Mail, Phone, MapPin, Send, Check, Clock, Instagram } from 'lucide-react';
 import { supabase } from '@/lib/supabaseClient';
 import { useSiteSettings } from '@/hooks/useSiteSettings';
+import { getWhatsAppLink } from '@/lib/whatsapp';
 import TikTokIcon from '@/components/icons/TikTokIcon';
 
 export default function ContactPage() {
@@ -11,7 +12,11 @@ export default function ContactPage() {
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const supportPhone = getSetting('support_phone', '+234 812 345 6789');
+  const rawSupportPhone = getSetting('support_phone', '+234 701 718 6752');
+  const supportPhone =
+    rawSupportPhone === '+234 812 345 6789' || rawSupportPhone === '2348000000000'
+      ? '+234 701 718 6752'
+      : rawSupportPhone;
   const supportEmail = getSetting('support_email', 'hello@jazelleskinhaven.com');
   const storeAddress = getSetting('store_address', 'Wuse II, Abuja, Nigeria');
 
@@ -75,7 +80,7 @@ export default function ContactPage() {
           {/* Contact info */}
           <div className="space-y-4">
             <a
-              href="https://wa.me/message/ET5GM7MR4LYIC1"
+              href={getWhatsAppLink()}
               target="_blank"
               rel="noopener noreferrer"
               className="group flex items-start gap-4 rounded-4xl bg-white p-5 shadow-soft transition-all duration-300 hover:-translate-y-0.5 hover:shadow-soft-lg"
@@ -136,16 +141,19 @@ export default function ContactPage() {
               </div>
             </a>
 
-            <div className="flex items-start gap-4 rounded-4xl bg-white p-5 shadow-soft">
+            <a
+              href={`tel:${supportPhone.replace(/\s+/g, '')}`}
+              className="group flex items-start gap-4 rounded-4xl bg-white p-5 shadow-soft transition-all duration-300 hover:-translate-y-0.5 hover:shadow-soft-lg"
+            >
               <span className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-cream-200 text-cream-800">
                 <Phone className="h-6 w-6" />
               </span>
               <div>
-                <h3 className="font-display text-lg font-medium text-berry-700">Phone</h3>
+                <h3 className="font-display text-lg font-medium text-berry-700 group-hover:text-blush-500 transition-colors">Phone</h3>
                 <p className="text-sm text-berry-400">{supportPhone}</p>
                 <p className="mt-1 text-xs text-blush-400">Mon&ndash;Sat, 9am&ndash;6pm WAT</p>
               </div>
-            </div>
+            </a>
 
             <div className="flex items-start gap-4 rounded-4xl bg-white p-5 shadow-soft">
               <span className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-sage-100 text-sage-600">

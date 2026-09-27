@@ -1,0 +1,37 @@
+User-agent: *
+Allow: /
+Allow: /shop
+Allow: /product/
+Allow: /categories/
+Allow: /category/
+Allow: /journal
+Allow: /about
+Allow: /faq
+Allow: /faqs
+Allow: /contact
+Allow: /shipping
+Allow: /returns
+Allow: /privacy
+Allow: /terms
+
+# Disallow private routes & user/admin areas
+Disallow: /admin
+Disallow: /admin/
+Disallow: /admin.html
+Disallow: /account
+Disallow: /account/
+Disallow: /cart
+Disallow: /checkout
+Disallow: /order-confirmation
+Disallow: /track-order
+Disallow: /login
+Disallow: /signup
+Disallow: /forgot-password
+Disallow: /api/
+
+# Disallow configuration & source files
+Disallow: /*.json$
+Disallow: /*.ts$
+Disallow: /*.tsx$
+Disallow: /*.sql$
+Disallow: /.env*

@@ -101,7 +101,7 @@ const SECTIONS: FAQSection[] = [
     title: 'Contact & Other Questions',
     icon: Phone,
     items: [
-      { question: 'How do I contact you?', answer: 'You can reach us on WhatsApp at +234 801 234 5678, by email at hello@jazelleskinhaven.com, or through our Contact page. We respond within 24 hours, Monday to Saturday.' },
+      { question: 'How do I contact you?', answer: 'You can reach us on WhatsApp at +234 701 718 6752, by email at hello@jazelleskinhaven.com, or through our Contact page. We respond within 24 hours, Monday to Saturday.' },
       { question: 'Do you have products for men?', answer: 'Our current collection is curated with young Nigerian women in mind, but many of our products \u2014 especially body care, grooming, and self-care items \u2014 are suitable for everyone. We are working on a dedicated men\u2019s section, so stay tuned.' },
       { question: 'Are your products dermatologically tested?', answer: 'We focus on gentle, well-formulated products from trusted brands. While we are not a clinical or dermatology brand, we choose products that are skin-friendly and suitable for everyday use.' },
     ],

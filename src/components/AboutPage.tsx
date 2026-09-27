@@ -1,31 +1,26 @@
-import { Heart, ArrowRight } from 'lucide-react';
+import { ArrowRight } from 'lucide-react';
 import { useSiteSettings } from '@/hooks/useSiteSettings';
 
 const WHY_SHOP = [
   {
     title: 'Carefully Selected',
     description: 'Every product is hand-picked and personally tested. If it is not good enough for my own routine, it does not make it to the shelf.',
-    emoji: '\u{1F4AB}',
   },
   {
     title: 'Self-Care Focused',
     description: 'This is not just about looking good — it is about feeling good. Every pick is chosen with your comfort and confidence in mind.',
-    emoji: '\u{1F49D}',
   },
   {
     title: 'Beginner Friendly',
     description: 'No complicated ten-step routines or confusing jargon. Just simple, gentle products that are easy to love and easy to use.',
-    emoji: '\u{1F331}',
   },
   {
     title: 'Affordable Luxury',
     description: 'A little treat should not break the bank. Quality self-care at prices that make sense for the modern Nigerian woman.',
-    emoji: '\u{1F48E}',
   },
   {
     title: 'Nigerian-Friendly',
     description: 'Made with our climate, our skin, and our lifestyle in mind. Delivered across Nigeria, from Abuja with love.',
-    emoji: '\u{1F9E1}',
   },
 ];
 
@@ -120,9 +115,6 @@ export default function AboutPage() {
                 key={item.title}
                 className="rounded-4xl bg-white p-6 shadow-soft transition-all duration-300 hover:-translate-y-1 hover:shadow-soft-lg"
               >
-                <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-blush-50 text-2xl">
-                  {item.emoji}
-                </div>
                 <h3 className="font-display text-lg font-medium text-berry-700">
                   {item.title}
                 </h3>
@@ -132,7 +124,6 @@ export default function AboutPage() {
               </div>
             ))}
             <div className="flex flex-col items-center justify-center rounded-4xl bg-berry-800 p-6 text-center">
-              <Heart className="mb-3 h-8 w-8 text-cream-200 fill-cream-200" />
               <p className="font-display text-lg font-medium text-cream-100">
                 Made with love, for you
               </p>

@@ -6,10 +6,10 @@ import {
   Phone,
   Send,
   MessageCircle,
-  ExternalLink,
 } from 'lucide-react';
 import Logo from '@/components/Logo';
 import { supabase } from '@/lib/supabaseClient';
+import { getWhatsAppLink } from '@/lib/whatsapp';
 import TikTokIcon from '@/components/icons/TikTokIcon';
 
 const FOOTER_SECTIONS = [
@@ -167,50 +167,14 @@ export default function Footer() {
                 </div>
                 <div className="flex items-center gap-2.5">
                   <Phone className="w-4 h-4 text-blush-400 flex-shrink-0" />
-                  <a href="tel:+2348123456789" className="hover:text-blush-600 transition-colors">
-                    +234 812 345 6789
-                  </a>
-                </div>
-                <div className="flex items-center gap-2.5">
-                  <MessageCircle className="w-4 h-4 text-[#25D366] flex-shrink-0" />
-                  <a
-                    href="https://wa.me/message/ET5GM7MR4LYIC1"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="font-medium text-berry-700 hover:text-[#25D366] transition-colors inline-flex items-center gap-1"
-                  >
-                    <span>WhatsApp: Chat With Jazelle</span>
-                    <ExternalLink className="w-3 h-3 text-[#25D366]" />
+                  <a href="tel:+2347017186752" className="hover:text-blush-600 transition-colors">
+                    +234 701 718 6752
                   </a>
                 </div>
                 <div className="flex items-center gap-2.5">
                   <Mail className="w-4 h-4 text-blush-400 flex-shrink-0" />
                   <a href="mailto:hello@jazelleskinhaven.com" className="hover:text-blush-600 transition-colors">
                     hello@jazelleskinhaven.com
-                  </a>
-                </div>
-                <div className="flex items-center gap-2.5">
-                  <Instagram className="w-4 h-4 text-blush-500 flex-shrink-0" />
-                  <a
-                    href="https://www.instagram.com/jazelle.skin.haven"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="font-medium text-blush-600 hover:text-blush-700 transition-colors inline-flex items-center gap-1"
-                  >
-                    <span>@jazelle.skin.haven on Instagram</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
-                </div>
-                <div className="flex items-center gap-2.5">
-                  <TikTokIcon className="w-4 h-4 text-berry-800 flex-shrink-0" />
-                  <a
-                    href="https://www.tiktok.com/@jazelleskinhaven"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="font-medium text-berry-700 hover:text-berry-900 transition-colors inline-flex items-center gap-1"
-                  >
-                    <span>@jazelleskinhaven on TikTok</span>
-                    <ExternalLink className="w-3 h-3" />
                   </a>
                 </div>
               </div>
@@ -262,14 +226,14 @@ export default function Footer() {
                 <span>@jazelleskinhaven</span>
               </a>
               <a
-                href="https://wa.me/message/ET5GM7MR4LYIC1"
+                href={getWhatsAppLink()}
                 target="_blank"
                 rel="noopener noreferrer"
-                aria-label="Chat on WhatsApp"
+                aria-label="Chat With Us on WhatsApp"
                 className="flex items-center gap-2 px-3.5 py-2 rounded-full bg-white text-berry-600 hover:bg-emerald-50 hover:text-emerald-700 transition-colors duration-200 shadow-soft text-xs font-medium"
               >
                 <MessageCircle className="w-4 h-4 text-[#25D366]" />
-                <span>Chat on WhatsApp</span>
+                <span>Chat With Us</span>
               </a>
             </div>
             <p className="text-xs text-berry-400 text-center sm:text-right">

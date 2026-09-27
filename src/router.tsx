@@ -33,7 +33,16 @@ export function RouterProvider({ children }: { children: ReactNode }) {
       const target = (event.target as HTMLElement)?.closest('a');
       if (!target) return;
       const href = target.getAttribute('href');
-      if (!href || href.startsWith('http') || href.startsWith('//') || href.startsWith('#') || href.startsWith('mailto:') || target.target === '_blank') return;
+      if (
+        !href ||
+        href.startsWith('http') ||
+        href.startsWith('//') ||
+        href.startsWith('#') ||
+        href.startsWith('mailto:') ||
+        href.startsWith('tel:') ||
+        target.target === '_blank'
+      )
+        return;
       event.preventDefault();
       navigate(href);
     };

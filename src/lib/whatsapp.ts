@@ -1,16 +1,22 @@
-// WhatsApp helper — builds click-to-chat URLs with pre-filled messages
+// WhatsApp helper — uses the official Jazelle Skin Haven WhatsApp click-to-chat link and phone number
 
-const DEFAULT_WHATSAPP_NUMBER = '2348000000000';
+export const DEFAULT_WHATSAPP_NUMBER = '2347017186752';
+export const WHATSAPP_CHAT_URL = 'https://wa.me/message/ET5GM7MR4LYIC1';
 
 export function getActiveWhatsAppNumber(): string {
   return DEFAULT_WHATSAPP_NUMBER;
 }
 
-export function getWhatsAppLink(message?: string, customNumber?: string): string {
-  const baseNumber = (customNumber || getActiveWhatsAppNumber()).replace(/[^0-9]/g, '');
-  const base = `https://wa.me/${baseNumber}`;
-  if (!message) return base;
-  return `${base}?text=${encodeURIComponent(message)}`;
+export function getWhatsAppLink(_message?: string, customNumber?: string): string {
+  if (customNumber) {
+    const cleanNumber = customNumber.replace(/[^0-9]/g, '');
+    if (cleanNumber && cleanNumber !== '2348000000000') {
+      return _message
+        ? `https://wa.me/${cleanNumber}?text=${encodeURIComponent(_message)}`
+        : `https://wa.me/${cleanNumber}`;
+    }
+  }
+  return WHATSAPP_CHAT_URL;
 }
 
 export const WHATSAPP_MESSAGES = {

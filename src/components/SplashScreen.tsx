@@ -29,10 +29,10 @@ export default function SplashScreen({ onComplete }: { onComplete: () => void })
         <img
           src={jazelleSplashLogo}
           alt="Jazelle Skin Haven"
-          className="w-64 h-64 sm:w-80 sm:h-80 md:w-96 md:h-96 object-contain opacity-0 animate-splash-badge select-none"
+          className="w-20 h-20 sm:w-24 sm:h-24 object-contain opacity-0 animate-splash-badge select-none"
         />
 
-        <p className="mt-6 text-xs sm:text-sm font-medium uppercase tracking-[0.26em] text-berry-600 opacity-0 animate-splash-subtitle text-center">
+        <p className="mt-4 text-[11px] sm:text-xs font-medium uppercase tracking-[0.24em] text-berry-600 opacity-0 animate-splash-subtitle text-center">
           Self-Care &bull; Skincare &bull; Nationwide
         </p>
       </div>

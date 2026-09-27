@@ -84,7 +84,8 @@ export const DEFAULT_SITE_SETTINGS: SiteSettings = {
   testimonials_subtitle: 'Real Customer Love',
 
   announcement_bar: 'Free delivery on orders over ₦35,000 • Nationwide shipping across Nigeria',
-  whatsapp_number: '2348000000000',
+  whatsapp_number: '2347017186752',
+  support_phone: '+234 701 718 6752',
   support_email: 'hello@jazelle.ng',
   instagram_handle: '@jazelleskinhaven',
   tiktok_handle: '@jazelleskinhaven',

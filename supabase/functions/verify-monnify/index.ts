@@ -8,10 +8,17 @@ const corsHeaders = {
 
 const DEFAULT_DELIVERY_FEE = 3500;
 const DEFAULT_FREE_DELIVERY_THRESHOLD = 35000;
+const DEFAULT_TOKEN_LIFETIME_SECONDS = 3600;
+const TOKEN_EXPIRY_SAFETY_BUFFER_MS = 60 * 1000;
 
+// In-memory fallback rate limiter if DB table is not yet migrated
 const fallbackRateMap = new Map<string, { count: number; resetAt: number }>();
 
-function checkFallbackMemoryLimit(key: string, maxRequests: number, windowSeconds: number): { allowed: boolean; retryAfter: number } {
+function checkFallbackMemoryLimit(
+  key: string,
+  maxRequests: number,
+  windowSeconds: number
+): { allowed: boolean; retryAfter: number } {
   const now = Date.now();
   const windowMs = windowSeconds * 1000;
   const entry = fallbackRateMap.get(key);
@@ -24,6 +31,61 @@ function checkFallbackMemoryLimit(key: string, maxRequests: number, windowSecond
     return { allowed: false, retryAfter: Math.max(1, Math.ceil((entry.resetAt - now) / 1000)) };
   }
   return { allowed: true, retryAfter: 0 };
+}
+
+// Cached Monnify OAuth Bearer token (~1 hour lifetime, auto-refreshes when expired)
+let cachedMonnifyToken: {
+  accessToken: string;
+  expiresAt: number;
+  cacheKey: string;
+} | null = null;
+
+async function getMonnifyAccessToken(
+  baseUrl: string,
+  apiKey: string,
+  secretKey: string
+): Promise<string> {
+  const cacheKey = `${baseUrl}|${apiKey}`;
+  const now = Date.now();
+
+  if (
+    cachedMonnifyToken &&
+    cachedMonnifyToken.cacheKey === cacheKey &&
+    cachedMonnifyToken.accessToken &&
+    now < cachedMonnifyToken.expiresAt
+  ) {
+    return cachedMonnifyToken.accessToken;
+  }
+
+  const credentials = btoa(`${apiKey}:${secretKey}`);
+  const authRes = await fetch(`${baseUrl}/api/v1/auth/login`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${credentials}`,
+      'Content-Type': 'application/json',
+    },
+  });
+
+  const authJson = await authRes.json().catch(() => null);
+  const accessToken = authJson?.responseBody?.accessToken;
+
+  if (!authRes.ok || !authJson?.requestSuccessful || !accessToken) {
+    cachedMonnifyToken = null;
+    throw new Error(
+      authJson?.responseMessage || `Monnify authentication failed (HTTP ${authRes.status})`
+    );
+  }
+
+  const expiresInSeconds = Number(authJson?.responseBody?.expiresIn) || DEFAULT_TOKEN_LIFETIME_SECONDS;
+  const ttlMs = Math.max(60 * 1000, expiresInSeconds * 1000 - TOKEN_EXPIRY_SAFETY_BUFFER_MS);
+
+  cachedMonnifyToken = {
+    accessToken,
+    expiresAt: Date.now() + ttlMs,
+    cacheKey,
+  };
+
+  return accessToken;
 }
 
 Deno.serve(async (req: Request) => {
@@ -41,7 +103,16 @@ Deno.serve(async (req: Request) => {
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL') || '';
     const supabaseServiceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
-    const paystackSecretKey = (Deno.env.get('PAYSTACK_SECRET_KEY') || '').trim();
+    const monnifyApiKey = (
+      Deno.env.get('MONNIFY_API_KEY') ||
+      Deno.env.get('VITE_MONNIFY_API_KEY') ||
+      ''
+    ).trim();
+    const monnifySecretKey = (Deno.env.get('MONNIFY_SECRET_KEY') || '').trim();
+    const explicitBase = (Deno.env.get('MONNIFY_BASE_URL') || '').trim().replace(/\/+$/, '');
+    const isTestMode = !monnifyApiKey.startsWith('MK_PROD_');
+    const monnifyBaseUrl =
+      explicitBase || (isTestMode ? 'https://sandbox.monnify.com' : 'https://api.monnify.com');
 
     if (!supabaseUrl || !supabaseServiceRoleKey) {
       return new Response(
@@ -59,14 +130,16 @@ Deno.serve(async (req: Request) => {
     });
 
     const body = await req.json().catch(() => ({}));
-    const rawReference = body.reference || body.orderNumber;
+    const rawReference = body.paymentReference || body.reference || body.orderNumber;
+    const rawTxRef =
+      typeof body.transactionReference === 'string' ? body.transactionReference.trim() : '';
 
     if (!rawReference || typeof rawReference !== 'string' || !rawReference.trim()) {
       return new Response(
         JSON.stringify({
           verified: false,
           status: 'invalid_reference',
-          message: 'Missing or invalid transaction reference.',
+          message: 'Missing or invalid payment reference.',
         }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
@@ -76,9 +149,13 @@ Deno.serve(async (req: Request) => {
     const forwardedFor = req.headers.get('x-forwarded-for');
     const clientIp = forwardedFor ? forwardedFor.split(',')[0].trim() : 'unknown-ip';
 
-    // 1. Database-backed rate limit (5 attempts / 60s per reference, 15 / 60s per IP)
-    const refRateKey = `verify_paystack_ref:${cleanRef}`;
-    const ipRateKey = `verify_paystack_ip:${clientIp}`;
+    // ---------------------------------------------------------------------------
+    // 1. DATABASE-BACKED RATE LIMITING (check_and_increment_rate_limit)
+    //    - Max 5 attempts per 60s per payment reference
+    //    - Max 15 attempts per 60s per client IP
+    // ---------------------------------------------------------------------------
+    const refRateKey = `verify_monnify_ref:${cleanRef}`;
+    const ipRateKey = `verify_monnify_ip:${clientIp}`;
 
     let rateAllowed = true;
     let retryAfter = 60;
@@ -130,7 +207,10 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // 2. Look up actual order in public.orders
+    // ---------------------------------------------------------------------------
+    // 2. LOOK UP THE ORDER IN public.orders & RECALCULATE EXPECTED TOTAL SERVER-SIDE
+    //    Never trust expectedAmount from the client request body!
+    // ---------------------------------------------------------------------------
     const { data: orderRow, error: orderFetchErr } = await supabaseAdmin
       .from('orders')
       .select('*')
@@ -148,22 +228,24 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    // If order is already verified & stock decremented, return idempotent success
     if (orderRow.status !== 'pending' && orderRow.stock_decremented === true) {
       return new Response(
         JSON.stringify({
           verified: true,
           alreadyProcessed: true,
-          status: 'success',
+          status: 'PAID',
           reference: cleanRef,
           orderNumber: orderRow.order_number,
-          amount: Number(orderRow.total) * 100,
+          amount: Number(orderRow.total),
+          serverExpectedNaira: Number(orderRow.total),
           currency: 'NGN',
         }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // 3. Recalculate true expected total from public.products and public.coupons
+    // Parse items from orderRow.items and look up current prices from public.products
     const orderItems = Array.isArray(orderRow.items) ? orderRow.items : [];
     if (orderItems.length === 0) {
       return new Response(
@@ -221,9 +303,11 @@ Deno.serve(async (req: Request) => {
         );
       }
 
-      serverSubtotal += Number(matchedProduct.price) * qty;
+      const realUnitPrice = Number(matchedProduct.price);
+      serverSubtotal += realUnitPrice * qty;
     }
 
+    // Re-validate coupon_code server-side if attached
     let serverDiscountAmount = 0;
     let verifiedCouponId: string | null = null;
     let verifiedCouponUsedCount = 0;
@@ -236,12 +320,23 @@ Deno.serve(async (req: Request) => {
         .ilike('code', rawCouponCode)
         .maybeSingle();
 
-      if (couponErr || !couponRow || couponRow.is_active !== true) {
+      if (couponErr || !couponRow) {
         return new Response(
           JSON.stringify({
             verified: false,
             status: 'invalid_coupon',
-            message: `Security Check Failed: Promo code "${rawCouponCode}" is invalid or inactive.`,
+            message: `Security Check Failed: Promo code "${rawCouponCode}" does not exist.`,
+          }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (couponRow.is_active !== true) {
+        return new Response(
+          JSON.stringify({
+            verified: false,
+            status: 'invalid_coupon',
+            message: `Security Check Failed: Promo code "${rawCouponCode}" is inactive.`,
           }),
           { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
@@ -293,6 +388,7 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    // Fetch free_delivery_threshold from site_settings
     const { data: thresholdSetting } = await supabaseAdmin
       .from('site_settings')
       .select('value')
@@ -309,8 +405,8 @@ Deno.serve(async (req: Request) => {
       serverSubtotal === 0 || serverSubtotal >= freeDeliveryThreshold ? 0 : DEFAULT_DELIVERY_FEE;
 
     const serverExpectedTotalNaira = Math.max(0, serverSubtotal - serverDiscountAmount) + serverDeliveryFee;
-    const serverExpectedKobo = Math.round(serverExpectedTotalNaira * 100);
 
+    // Detect if client tampered with order discount_amount or total before checkout
     const clientOrderDiscount = Math.round(Number(orderRow.discount_amount || 0));
     const clientOrderTotalNaira = Math.round(Number(orderRow.total || 0));
 
@@ -323,7 +419,7 @@ Deno.serve(async (req: Request) => {
           verified: false,
           status: 'amount_mismatch',
           message: `Security Verification Rejected: Tampered discount or order total detected. Client submitted discount ₦${clientOrderDiscount.toLocaleString()} (total ₦${clientOrderTotalNaira.toLocaleString()}), but server calculated discount ₦${serverDiscountAmount.toLocaleString()} (true expected total ₦${serverExpectedTotalNaira.toLocaleString()}).`,
-          serverExpectedTotalNaira,
+          serverExpectedNaira: serverExpectedTotalNaira,
           serverDiscountAmount,
           clientOrderTotalNaira,
           clientOrderDiscount,
@@ -332,62 +428,119 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // 4. Verify with Paystack API
-    if (!paystackSecretKey || !paystackSecretKey.startsWith('sk_')) {
+    // ---------------------------------------------------------------------------
+    // 3. CALL MONNIFY'S VERIFY TRANSACTION API WITH CACHED BEARER TOKEN
+    // ---------------------------------------------------------------------------
+    if (!monnifyApiKey || !monnifySecretKey) {
       return new Response(
         JSON.stringify({
           verified: false,
           status: 'missing_secret_key',
-          message: 'PAYSTACK_SECRET_KEY is missing or invalid in Edge Function secrets.',
+          message: 'MONNIFY_API_KEY or MONNIFY_SECRET_KEY is missing in Edge Function secrets.',
         }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    const paystackRes = await fetch(
-      `https://api.paystack.co/transaction/verify/${encodeURIComponent(cleanRef)}`,
-      {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${paystackSecretKey}`,
-          'Content-Type': 'application/json',
-        },
-      }
-    );
-
-    const paystackData = await paystackRes.json();
-    const txData = paystackData?.data;
-
-    if (!paystackRes.ok || !paystackData.status || !txData || txData.status !== 'success') {
+    let accessToken: string;
+    try {
+      accessToken = await getMonnifyAccessToken(monnifyBaseUrl, monnifyApiKey, monnifySecretKey);
+    } catch (authErr: unknown) {
+      const authMsg = authErr instanceof Error ? authErr.message : 'Monnify authentication failed';
       return new Response(
         JSON.stringify({
           verified: false,
-          status: txData?.status || 'transaction_not_found',
-          message: paystackData?.message || `Transaction "${cleanRef}" was not verified by Paystack.`,
+          status: 'monnify_auth_failed',
+          message: authMsg,
         }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    const paidKobo = Number(txData.amount);
-    if (Math.abs(paidKobo - serverExpectedKobo) > 100) {
+    const verifyUrl = rawTxRef
+      ? `${monnifyBaseUrl}/api/v2/transactions/${encodeURIComponent(rawTxRef)}`
+      : `${monnifyBaseUrl}/api/v1/merchant/transactions/query?paymentReference=${encodeURIComponent(cleanRef)}`;
+
+    const monnifyRes = await fetch(verifyUrl, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    const monnifyData = await monnifyRes.json().catch(() => null);
+    const txData = monnifyData?.responseBody;
+
+    if (!monnifyRes.ok || !monnifyData?.requestSuccessful || !txData) {
+      return new Response(
+        JSON.stringify({
+          verified: false,
+          status: 'transaction_not_found',
+          message:
+            monnifyData?.responseMessage ||
+            `Monnify could not find transaction "${rawTxRef || cleanRef}".`,
+        }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // ---------------------------------------------------------------------------
+    // 4. CONFIRM paymentStatus === "PAID" AND amountPaid MATCHES SERVER-CALCULATED TOTAL
+    // ---------------------------------------------------------------------------
+    const paymentStatus = String(txData.paymentStatus || '').toUpperCase();
+    if (paymentStatus !== 'PAID') {
+      return new Response(
+        JSON.stringify({
+          verified: false,
+          status: paymentStatus.toLowerCase() || 'failed',
+          reference: txData.paymentReference || cleanRef,
+          transactionReference: txData.transactionReference || rawTxRef,
+          message: `Payment status is "${paymentStatus || 'UNKNOWN'}".`,
+        }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const txCurrency = String(txData.currencyCode || txData.currency || 'NGN').toUpperCase();
+    if (txCurrency !== 'NGN') {
+      return new Response(
+        JSON.stringify({
+          verified: false,
+          status: 'currency_mismatch',
+          message: `Currency mismatch: expected NGN, received ${txCurrency}.`,
+        }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const amountPaid = Number(txData.amountPaid ?? txData.totalPayable ?? 0);
+    if (Math.abs(amountPaid - serverExpectedTotalNaira) > 1) {
       return new Response(
         JSON.stringify({
           verified: false,
           status: 'amount_mismatch',
-          message: `Amount mismatch: Paystack confirmed ₦${(paidKobo / 100).toLocaleString()}, but server-calculated order total is ₦${serverExpectedTotalNaira.toLocaleString()}.`,
-          paidKobo,
-          serverExpectedKobo,
+          message: `Amount mismatch: Monnify confirmed ₦${amountPaid.toLocaleString()}, but server-calculated order total is ₦${serverExpectedTotalNaira.toLocaleString()}.`,
+          amount: amountPaid,
+          serverExpectedNaira: serverExpectedTotalNaira,
         }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // 5. Finalize order, decrement stock, increment coupon used_count
+    const resolvedTxRef = String(txData.transactionReference || rawTxRef || cleanRef);
+
+    // ---------------------------------------------------------------------------
+    // 5. SERVER-SIDE FINALIZATION (USING SERVICE ROLE KEY)
+    //    - Claim stock decrement idempotently via claim_order_stock_decrement
+    //    - Decrement product stock in public.products
+    //    - Increment coupon used_count in public.coupons
+    //    - Mark order as status = 'placed'
+    // ---------------------------------------------------------------------------
     let claimed = false;
     const { data: claimRes, error: claimErr } = await supabaseAdmin.rpc(
       'claim_order_stock_decrement',
-      { p_order_number: cleanRef, p_payment_reference: txData.reference || cleanRef }
+      { p_order_number: cleanRef, p_payment_reference: resolvedTxRef }
     );
 
     if (!claimErr && claimRes === true) {
@@ -395,7 +548,10 @@ Deno.serve(async (req: Request) => {
     } else if (claimErr) {
       const { data: condRows } = await supabaseAdmin
         .from('orders')
-        .update({ status: 'placed', updated_at: new Date().toISOString() })
+        .update({
+          status: 'placed',
+          updated_at: new Date().toISOString(),
+        })
         .eq('order_number', cleanRef)
         .eq('status', 'pending')
         .select('id');
@@ -415,6 +571,7 @@ Deno.serve(async (req: Request) => {
       .eq('order_number', cleanRef);
 
     if (claimed) {
+      // Decrement product stock in public.products
       for (const item of orderItems) {
         const qty = Math.max(1, Math.floor(Number(item.quantity) || 1));
         const prod = dbProducts.find(
@@ -437,26 +594,43 @@ Deno.serve(async (req: Request) => {
         }
       }
 
+      // Increment coupon used_count server-side
       if (verifiedCouponId) {
         await supabaseAdmin
           .from('coupons')
           .update({ used_count: verifiedCouponUsedCount + 1 })
           .eq('id', verifiedCouponId);
       }
+
+      // Record audit entry in payment_verifications if table exists
+      try {
+        await supabaseAdmin.from('payment_verifications').upsert({
+          reference: resolvedTxRef,
+          order_number: cleanRef,
+          amount_kobo: Math.round(amountPaid * 100),
+          currency: txCurrency,
+          status: 'verified',
+          verified_via: 'verify-monnify',
+          paystack_response: txData,
+        });
+      } catch {
+        // Ignore if audit table not yet migrated
+      }
     }
 
     return new Response(
       JSON.stringify({
         verified: true,
-        status: 'success',
-        reference: txData.reference || cleanRef,
+        status: paymentStatus,
+        reference: cleanRef,
+        transactionReference: resolvedTxRef,
         orderNumber: cleanRef,
-        amount: paidKobo,
-        serverExpectedKobo,
+        amount: amountPaid,
+        serverExpectedNaira: serverExpectedTotalNaira,
         serverDiscountAmount,
-        currency: txData.currency || 'NGN',
-        paidAt: txData.paid_at,
-        channel: txData.channel,
+        currency: txCurrency,
+        paid_at: txData.paidOn || txData.createdOn,
+        channel: txData.paymentMethod,
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );

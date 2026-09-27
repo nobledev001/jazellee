@@ -2,14 +2,40 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.8';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-paystack-signature',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, monnify-signature',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
 const DEFAULT_DELIVERY_FEE = 3500;
 const DEFAULT_FREE_DELIVERY_THRESHOLD = 35000;
 
-async function verifyPaystackSignature(rawBody: string, signatureHeader: string, secretKey: string): Promise<boolean> {
+/**
+ * Constant-time byte comparison to prevent timing side-channel attacks on HMAC signatures.
+ */
+function timingSafeEqualHex(a: string, b: string): boolean {
+  const cleanA = a.trim().toLowerCase();
+  const cleanB = b.trim().toLowerCase();
+  if (cleanA.length !== cleanB.length || cleanA.length === 0) {
+    return false;
+  }
+  const encoder = new TextEncoder();
+  const bufA = encoder.encode(cleanA);
+  const bufB = encoder.encode(cleanB);
+  if (bufA.length !== bufB.length) {
+    return false;
+  }
+  let diff = 0;
+  for (let i = 0; i < bufA.length; i++) {
+    diff |= bufA[i] ^ bufB[i];
+  }
+  return diff === 0;
+}
+
+async function verifyMonnifySignature(
+  rawBody: string,
+  signatureHeader: string,
+  secretKey: string
+): Promise<boolean> {
   if (!signatureHeader || !secretKey) return false;
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey(
@@ -23,7 +49,7 @@ async function verifyPaystackSignature(rawBody: string, signatureHeader: string,
   const computedHex = Array.from(new Uint8Array(sigBuffer))
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
-  return computedHex === signatureHeader.trim().toLowerCase();
+  return timingSafeEqualHex(computedHex, signatureHeader);
 }
 
 Deno.serve(async (req: Request) => {
@@ -39,11 +65,11 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const paystackSecretKey = (Deno.env.get('PAYSTACK_SECRET_KEY') || '').trim();
+    const monnifySecretKey = (Deno.env.get('MONNIFY_SECRET_KEY') || '').trim();
     const supabaseUrl = Deno.env.get('SUPABASE_URL') || '';
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
 
-    if (!paystackSecretKey || !supabaseUrl || !supabaseServiceKey) {
+    if (!monnifySecretKey || !supabaseUrl || !supabaseServiceKey) {
       return new Response(
         JSON.stringify({ error: 'Missing webhook server configuration' }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -60,7 +86,7 @@ Deno.serve(async (req: Request) => {
     // Database-backed rate limit (60 webhooks / 60s per IP)
     const { data: rateData, error: rateErr } = await supabaseAdmin.rpc(
       'check_and_increment_rate_limit',
-      { p_key: `paystack_webhook:${clientIp}`, p_max_requests: 60, p_window_seconds: 60 }
+      { p_key: `monnify_webhook:${clientIp}`, p_max_requests: 60, p_window_seconds: 60 }
     );
     if (!rateErr && rateData && !rateData.allowed) {
       return new Response(JSON.stringify({ error: 'Too many webhook requests' }), {
@@ -69,10 +95,11 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    const signature = req.headers.get('x-paystack-signature') || '';
+    // 1. Verify "monnify-signature" header — HMAC-SHA512 of raw body using MONNIFY_SECRET_KEY
+    const signature = req.headers.get('monnify-signature') || '';
     const rawBody = await req.text();
 
-    const isValidSig = await verifyPaystackSignature(rawBody, signature, paystackSecretKey);
+    const isValidSig = await verifyMonnifySignature(rawBody, signature, monnifySecretKey);
     if (!isValidSig) {
       return new Response(JSON.stringify({ error: 'Invalid HMAC signature' }), {
         status: 401,
@@ -81,21 +108,25 @@ Deno.serve(async (req: Request) => {
     }
 
     const payload = JSON.parse(rawBody);
-    const eventType = payload?.event;
-    const data = payload?.data;
+    const eventType = payload?.eventType || 'SUCCESSFUL_TRANSACTION';
+    const eventData = payload?.eventData || payload?.data || payload || {};
+    const paymentStatus = String(eventData.paymentStatus || '').toUpperCase();
 
-    if (eventType !== 'charge.success' || !data || data.status !== 'success') {
-      return new Response(JSON.stringify({ received: true, ignored: true }), {
+    if (eventType !== 'SUCCESSFUL_TRANSACTION' || paymentStatus !== 'PAID') {
+      return new Response(JSON.stringify({ received: true, ignored: true, eventType, paymentStatus }), {
         status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
-    const reference: string = (data.reference || '').trim();
-    const paidAmountKobo = Number(data.amount || 0);
+    const reference: string = String(eventData.paymentReference || '').trim();
+    const transactionReference: string = String(
+      eventData.transactionReference || reference
+    ).trim();
+    const amountPaid = Number(eventData.amountPaid ?? eventData.totalPayable ?? 0);
 
     if (!reference) {
-      return new Response(JSON.stringify({ error: 'Missing transaction reference' }), {
+      return new Response(JSON.stringify({ error: 'Missing paymentReference' }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
@@ -116,12 +147,12 @@ Deno.serve(async (req: Request) => {
 
     if (existingOrder.status !== 'pending' && existingOrder.stock_decremented === true) {
       return new Response(
-        JSON.stringify({ received: true, alreadyProcessed: true, reference }),
+        JSON.stringify({ received: true, alreadyProcessed: true, reference, transactionReference }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // Server-side recalculation of expected total from products & coupons
+    // 2. Server-side recalculation of expected total from products & coupons
     const orderItems = Array.isArray(existingOrder.items) ? existingOrder.items : [];
     const { data: dbProducts } = await supabaseAdmin
       .from('products')
@@ -207,23 +238,43 @@ Deno.serve(async (req: Request) => {
     const serverDeliveryFee =
       serverSubtotal === 0 || serverSubtotal >= freeDeliveryThreshold ? 0 : DEFAULT_DELIVERY_FEE;
     const serverExpectedTotalNaira = Math.max(0, serverSubtotal - serverDiscountAmount) + serverDeliveryFee;
-    const serverExpectedKobo = Math.round(serverExpectedTotalNaira * 100);
 
-    if (Math.abs(paidAmountKobo - serverExpectedKobo) > 100) {
+    if (Math.abs(amountPaid - serverExpectedTotalNaira) > 1) {
       return new Response(
         JSON.stringify({
           error: 'Amount mismatch against server-calculated order total',
-          paidAmountKobo,
-          serverExpectedKobo,
+          status: 'amount_mismatch',
+          amountPaid,
+          serverExpectedTotalNaira,
         }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    const { data: claimed } = await supabaseAdmin.rpc('claim_order_stock_decrement', {
-      p_order_number: reference,
-      p_payment_reference: reference,
-    });
+    // Finalize order: claim stock decrement, mark order placed, decrement stock, increment coupon used_count
+    let claimed = false;
+    const { data: claimRes, error: claimErr } = await supabaseAdmin.rpc(
+      'claim_order_stock_decrement',
+      {
+        p_order_number: reference,
+        p_payment_reference: transactionReference,
+      }
+    );
+
+    if (!claimErr && claimRes === true) {
+      claimed = true;
+    } else if (claimErr) {
+      const { data: condRows } = await supabaseAdmin
+        .from('orders')
+        .update({
+          status: 'placed',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('order_number', reference)
+        .eq('status', 'pending')
+        .select('id');
+      claimed = Boolean(condRows && condRows.length > 0);
+    }
 
     await supabaseAdmin
       .from('orders')
@@ -237,7 +288,7 @@ Deno.serve(async (req: Request) => {
       })
       .eq('order_number', reference);
 
-    if (claimed === true) {
+    if (claimed) {
       for (const item of orderItems) {
         const qty = Math.max(1, Math.floor(Number(item.quantity) || 1));
         const prod = dbProducts.find(
@@ -268,8 +319,14 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    // 3. Return 200 promptly to acknowledge receipt
     return new Response(
-      JSON.stringify({ received: true, finalized: true, reference }),
+      JSON.stringify({
+        received: true,
+        finalized: true,
+        reference,
+        transactionReference,
+      }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   } catch (err: unknown) {

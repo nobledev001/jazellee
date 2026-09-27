@@ -35,11 +35,11 @@ export default function WhatsAppButton() {
 
       {/* Floating button */}
       <a
-        href={getWhatsAppLink()}
+        href={getWhatsAppLink(undefined, '+2347017186752')}
         target="_blank"
         rel="noopener noreferrer"
         className="group relative flex items-center justify-center w-14 h-14 rounded-full bg-[#25D366] shadow-soft-lg hover:shadow-soft-xl transition-shadow duration-300"
-        aria-label="Chat on WhatsApp"
+        aria-label="Chat on WhatsApp (+234 701 718 6752)"
       >
         <span className="absolute inset-0 rounded-full bg-[#25D366] animate-ping opacity-20" />
         <MessageCircle className="relative w-7 h-7 text-white fill-white/20" />

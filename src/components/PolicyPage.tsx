@@ -70,7 +70,7 @@ export default function PolicyPage({ policy }: { policy: PolicyType }) {
         },
         {
           heading: '2. Payment Security',
-          body: 'All payment processing is handled through PCI-DSS Level 1 certified gateways (such as Paystack). Jazelle Skin Haven never stores, sees, or retains your raw card digits or bank PINs.',
+          body: 'All payment processing is handled through PCI-DSS Level 1 certified gateways (such as Monnify). Jazelle Skin Haven never stores, sees, or retains your raw card digits or bank PINs.',
         },
         {
           heading: '3. Communication & Consent',

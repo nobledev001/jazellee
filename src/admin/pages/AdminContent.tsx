@@ -926,9 +926,9 @@ export default function AdminContent() {
                       </label>
                       <input
                         type="text"
-                        value={settings.whatsapp_number || '+2348123456789'}
+                        value={settings.whatsapp_number || '+2347017186752'}
                         onChange={(e) => handleSettingChange('whatsapp_number', e.target.value)}
-                        placeholder="2348123456789"
+                        placeholder="2347017186752"
                         className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:border-pink-500"
                       />
                       <p className="text-[11px] text-gray-400 mt-1">
@@ -944,7 +944,7 @@ export default function AdminContent() {
                         type="text"
                         value={settings.support_phone || ''}
                         onChange={(e) => handleSettingChange('support_phone', e.target.value)}
-                        placeholder="+234 812 345 6789"
+                        placeholder="+234 701 718 6752"
                         className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:border-pink-500"
                       />
                     </div>

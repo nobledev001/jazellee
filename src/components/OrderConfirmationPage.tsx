@@ -3,6 +3,9 @@ import { CheckCircle, Package, Mail, ArrowRight, Truck, Clock } from 'lucide-rea
 import { formatNaira } from '@/lib/format';
 import { useRouter } from '@/router';
 import { supabase } from '@/lib/auth';
+import { verifyMonnifyTransactionOnServer } from '@/lib/monnify';
+import { useStore } from '@/store/StoreContext';
+import { sendOrderConfirmationEmail } from '@/lib/email';
 
 interface OrderItem {
   slug: string;
@@ -22,8 +25,10 @@ interface Order {
   total: number;
   status: string;
   payment_status?: string;
+  payment_method?: string;
   customer_name: string;
   customer_email: string;
+  customer_phone?: string;
   delivery_address: string;
   delivery_state: string;
   delivery_lga: string;
@@ -32,7 +37,14 @@ interface Order {
 
 export default function OrderConfirmationPage() {
   const { search } = useRouter();
-  const orderNumber = (search.get('id') ?? '').trim();
+  const { clearCart, incrementCouponUsage } = useStore();
+  const orderNumber = (
+    search.get('id') ||
+    search.get('paymentReference') ||
+    search.get('reference') ||
+    ''
+  ).trim();
+  const transactionReference = (search.get('transactionReference') || '').trim();
   const contactParam = (search.get('email') ?? search.get('contact') ?? '').trim();
   const [order, setOrder] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
@@ -46,37 +58,95 @@ export default function OrderConfirmationPage() {
 
     let isMounted = true;
 
-    async function loadOrder() {
+    async function fetchTrackedOrder(): Promise<Order | null> {
+      let rpcResponse = await supabase.rpc('track_order', {
+        p_order_number: orderNumber,
+        ...(contactParam ? { p_contact: contactParam } : {}),
+      });
+
+      if (rpcResponse.error && !contactParam) {
+        rpcResponse = await supabase.rpc('track_order', {
+          p_order_number: orderNumber,
+          p_contact: '',
+        });
+      }
+
+      if (rpcResponse.error) {
+        console.error('[OrderConfirmationPage] track_order RPC error:', rpcResponse.error);
+        if (isMounted) setErrorMsg(rpcResponse.error.message);
+        return null;
+      }
+
+      if (rpcResponse.data) {
+        const raw = Array.isArray(rpcResponse.data) ? rpcResponse.data[0] : rpcResponse.data;
+        if (raw && typeof raw === 'object' && 'order_number' in raw) {
+          return raw as Order;
+        }
+      }
+      return null;
+    }
+
+    async function loadAndVerifyOrder() {
       setLoading(true);
       setErrorMsg(null);
       try {
-        // Call the SECURITY DEFINER track_order RPC so guest order confirmation works under RLS
-        // without granting public SELECT access on the orders table.
-        let rpcResponse = await supabase.rpc('track_order', {
-          p_order_number: orderNumber,
-          ...(contactParam ? { p_contact: contactParam } : {}),
-        });
+        let fetchedOrder = await fetchTrackedOrder();
 
-        // If the 2-arg signature required p_contact on an older DB function definition, retry with p_contact: ''
-        if (rpcResponse.error && !contactParam) {
-          rpcResponse = await supabase.rpc('track_order', {
-            p_order_number: orderNumber,
-            p_contact: '',
-          });
+        // When Monnify redirects back via redirectUrl after payment, verify & finalize on the server if still pending
+        if (
+          !fetchedOrder ||
+          fetchedOrder.status === 'pending' ||
+          (fetchedOrder.payment_status && fetchedOrder.payment_status !== 'paid') ||
+          transactionReference ||
+          search.get('paymentReference')
+        ) {
+          const verification = await verifyMonnifyTransactionOnServer(
+            orderNumber,
+            transactionReference || undefined,
+            fetchedOrder?.total,
+            contactParam || fetchedOrder?.customer_email || ''
+          );
+
+          if (verification.verified) {
+            const refreshed = await fetchTrackedOrder();
+            if (refreshed) {
+              fetchedOrder = refreshed;
+            }
+          }
         }
 
         if (!isMounted) return;
 
-        if (rpcResponse.error) {
-          console.error('[OrderConfirmationPage] track_order RPC error:', rpcResponse.error);
-          setErrorMsg(rpcResponse.error.message);
-          setOrder(null);
-        } else if (rpcResponse.data) {
-          const raw = Array.isArray(rpcResponse.data) ? rpcResponse.data[0] : rpcResponse.data;
-          if (raw && typeof raw === 'object' && 'order_number' in raw) {
-            setOrder(raw as Order);
-          } else {
-            setOrder(null);
+        if (fetchedOrder) {
+          setOrder(fetchedOrder);
+
+          // If order is finalized (or returned from redirect), clear cart & send confirmation email once
+          const confirmKey = `jazelle_confirmed_${fetchedOrder.order_number}`;
+          if (typeof window !== 'undefined' && !sessionStorage.getItem(confirmKey)) {
+            sessionStorage.setItem(confirmKey, '1');
+            void incrementCouponUsage();
+            clearCart();
+            window.dispatchEvent(new CustomEvent('jazelle_orders_updated'));
+
+            void sendOrderConfirmationEmail({
+              order_number: fetchedOrder.order_number,
+              customer_name: fetchedOrder.customer_name,
+              customer_email: fetchedOrder.customer_email,
+              customer_phone: fetchedOrder.customer_phone || '',
+              delivery_address: fetchedOrder.delivery_address,
+              delivery_state: fetchedOrder.delivery_state,
+              delivery_lga: fetchedOrder.delivery_lga,
+              items: (fetchedOrder.items || []).map((it) => ({
+                name: it.name,
+                quantity: it.quantity,
+                price: it.price,
+                image: it.image,
+              })),
+              subtotal: fetchedOrder.subtotal,
+              delivery_fee: fetchedOrder.delivery_fee,
+              total: fetchedOrder.total,
+              payment_method: fetchedOrder.payment_method || 'card',
+            });
           }
         } else {
           setOrder(null);
@@ -91,12 +161,12 @@ export default function OrderConfirmationPage() {
       }
     }
 
-    void loadOrder();
+    void loadAndVerifyOrder();
 
     return () => {
       isMounted = false;
     };
-  }, [orderNumber, contactParam]);
+  }, [orderNumber, transactionReference, contactParam, clearCart, incrementCouponUsage, search]);
 
   if (loading) {
     return (

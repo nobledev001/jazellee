@@ -5,7 +5,14 @@ import { formatNaira } from '@/lib/format';
 import { useRouter } from '@/router';
 import { useAuth, supabase, recordCustomerProfile } from '@/lib/auth';
 import { sendOrderConfirmationEmail } from '@/lib/email';
-import { getPaystackPublicKey, verifyPaystackTransactionOnServer, ensurePaystackScriptLoaded } from '@/lib/paystack';
+import {
+  getMonnifyConfig,
+  initializeMonnifyTransactionOnServer,
+  verifyMonnifyTransactionOnServer,
+  ensureMonnifyScriptLoaded,
+  type MonnifySDKOptions,
+  type MonnifyPaymentMethod,
+} from '@/lib/monnify';
 
 type PaymentMethod = 'card' | 'bank' | 'ussd';
 
@@ -15,20 +22,8 @@ const NIGERIAN_STATES = [
 
 declare global {
   interface Window {
-    PaystackPop?: {
-      setup: (options: {
-        key: string;
-        email: string;
-        amount: number;
-        currency?: string;
-        ref?: string;
-        channels?: string[];
-        metadata?: Record<string, unknown>;
-        callback: (response: { reference: string; status: string; trxref: string }) => void;
-        onClose: () => void;
-      }) => {
-        openIframe: () => void;
-      };
+    MonnifySDK?: {
+      initialize: (options: MonnifySDKOptions) => void;
     };
   }
 }
@@ -305,7 +300,7 @@ export default function CheckoutPage() {
     setPaymentNotice(null);
 
     let orderNumber = checkoutReference;
-    const paystackKey = getPaystackPublicKey();
+    const monnifyConfig = getMonnifyConfig();
 
     // Check if localStorage['jazelle-applied-coupon'] was modified directly in DevTools
     let activeCoupon = appliedCoupon;
@@ -447,104 +442,141 @@ export default function CheckoutPage() {
       return;
     }
 
-    const channels: string[] =
-      form.paymentMethod === 'bank'
-        ? ['bank_transfer', 'bank']
-        : form.paymentMethod === 'ussd'
-        ? ['ussd']
-        : ['card', 'bank', 'ussd', 'bank_transfer', 'qr'];
+    const redirectUrl = `${window.location.origin}/order-confirmation?id=${encodeURIComponent(
+      orderNumber
+    )}&email=${encodeURIComponent(form.email.trim())}`;
 
-    // Ensure PaystackPop inline script is loaded
-    await ensurePaystackScriptLoaded();
+    const paymentMethodsList: MonnifyPaymentMethod[] = ['CARD', 'PAY_WITH_BANK'];
 
-    if (typeof window.PaystackPop?.setup !== 'function') {
+    // 3. INITIALIZE MONNIFY TRANSACTION SERVER-SIDE
+    // Server recalculates the true order total (reusing catalog prices, active coupon rules, and delivery fee)
+    // and calls Monnify's Initialize Transaction API with paymentReference = orderNumber and paymentMethods = ["CARD", "PAY_WITH_BANK"].
+    setPaymentNotice('Initializing secure Monnify checkout...');
+    const initResult = await initializeMonnifyTransactionOnServer({
+      orderNumber,
+      paymentReference: orderNumber,
+      customerName: form.fullName.trim(),
+      customerEmail: form.email.trim(),
+      customerPhone: form.phone.trim(),
+      redirectUrl,
+      paymentDescription: `Jazelle Skin Haven Order #${orderNumber}`,
+      paymentMethods: paymentMethodsList,
+      metadata: {
+        order_number: orderNumber,
+        customer_name: form.fullName.trim(),
+        phone: form.phone.trim(),
+        delivery_address: `${form.address.trim()}, ${form.lga.trim()}, ${form.state}`,
+      },
+    });
+
+    // Reject immediately if server-side price/coupon recalculation caught tampering or invalid promo
+    if (
+      initResult.status === 'amount_mismatch' ||
+      initResult.status === 'invalid_coupon' ||
+      initResult.status === 'unknown_product' ||
+      initResult.status === 'invalid_item_quantity'
+    ) {
       isSubmittingRef.current = false;
       setProcessing(false);
-      setPaymentNotice(
-        'Unable to load Paystack checkout script. If you are using an ad blocker or privacy extension, please disable it for this site and try again, or open this store in a new browser tab.'
-      );
+      setPaymentNotice(initResult.message || 'Order total validation failed.');
       return;
     }
 
-    try {
-      const handler = window.PaystackPop.setup({
-        key: paystackKey,
-        email: form.email,
-        amount: Math.round(effectiveTotal * 100), // in kobo
-        currency: 'NGN',
-        ref: orderNumber,
-        channels,
-        metadata: {
-          custom_fields: [
-            { display_name: 'Customer Name', variable_name: 'customer_name', value: form.fullName },
-            { display_name: 'Phone Number', variable_name: 'phone', value: form.phone },
-            {
-              display_name: 'Delivery Address',
-              variable_name: 'delivery_address',
-              value: `${form.address}, ${form.lga}, ${form.state}`,
-            },
-          ],
-        },
-        callback: function (response: { reference?: string; trxref?: string; status?: string; message?: string }) {
-          const paymentRef = response.reference || response.trxref || orderNumber;
+    // 4. REDIRECT CUSTOMER TO RETURNED MONNIFY CHECKOUT URL (Monnify redirects back via redirectUrl after payment)
+    if (initResult.initialized && initResult.checkoutUrl) {
+      setPaymentNotice('Redirecting to secure Monnify checkout...');
+      window.location.href = initResult.checkoutUrl;
+      return;
+    }
 
-          setProcessing(true);
-          setPaymentNotice('Payment received by Paystack. Verifying transaction securely with backend...');
+    // Fallback: Use Monnify inline Web SDK modal with server-calculated amount if checkoutUrl was not returned
+    const resolvedApiKey = initResult.apiKey || monnifyConfig.apiKey;
+    const resolvedContractCode = initResult.contractCode || monnifyConfig.contractCode;
+    const serverCalculatedAmount =
+      typeof initResult.amount === 'number' && initResult.amount > 0
+        ? initResult.amount
+        : effectiveTotal;
 
-          void (async () => {
-            const verification = await verifyPaystackTransactionOnServer(
-              paymentRef,
-              effectiveTotal,
-              form.email.trim()
-            );
+    await ensureMonnifyScriptLoaded();
 
-            if (!verification.verified) {
-              isSubmittingRef.current = false;
-              setProcessing(false);
+    if (
+      typeof window.MonnifySDK?.initialize === 'function' &&
+      resolvedApiKey &&
+      resolvedContractCode
+    ) {
+      try {
+        window.MonnifySDK.initialize({
+          amount: serverCalculatedAmount,
+          currency: 'NGN',
+          reference: orderNumber,
+          customerFullName: form.fullName.trim(),
+          customerEmail: form.email.trim(),
+          customerMobileNumber: form.phone.trim(),
+          apiKey: resolvedApiKey,
+          contractCode: resolvedContractCode,
+          paymentDescription: `Jazelle Skin Haven Order #${orderNumber}`,
+          isTestMode: initResult.isTestMode ?? monnifyConfig.isTestMode,
+          redirectUrl,
+          paymentMethods: paymentMethodsList,
+          metadata: {
+            order_number: orderNumber,
+            customer_name: form.fullName.trim(),
+            phone: form.phone.trim(),
+            delivery_address: `${form.address}, ${form.lga}, ${form.state}`,
+          },
+          onComplete: function (response) {
+            const paymentRef = response?.paymentReference || orderNumber;
+            const transactionRef = response?.transactionReference || '';
 
-              const isIntegrationMismatch =
-                verification.status === 'transaction_not_found' ||
-                (typeof verification.message === 'string' && verification.message.includes('not found'));
+            setProcessing(true);
+            setPaymentNotice('Payment received by Monnify. Verifying transaction securely with backend...');
 
-              if (isIntegrationMismatch) {
+            void (async () => {
+              const verification = await verifyMonnifyTransactionOnServer(
+                paymentRef,
+                transactionRef,
+                serverCalculatedAmount,
+                form.email.trim()
+              );
+
+              if (!verification.verified) {
+                isSubmittingRef.current = false;
+                setProcessing(false);
                 setPaymentNotice(
-                  `Paystack Verification Failed (Transaction Not Found): Paystack could not locate reference "${paymentRef}" on the configured integration. Please ensure your frontend VITE_PAYSTACK_PUBLIC_KEY and backend PAYSTACK_SECRET_KEY belong to the SAME Paystack account (and both are in Test mode).`
+                  `Monnify Verification Failed: ${verification.message || 'Transaction could not be verified'}`
                 );
-              } else {
-                setPaymentNotice(
-                  `Paystack Verification Failed: ${verification.message || 'Transaction could not be verified'}`
-                );
+                return;
               }
+
+              await handlePaymentSuccess(
+                verification.transactionReference || verification.reference || paymentRef,
+                orderNumber
+              );
+            })();
+          },
+          onClose: function (data) {
+            if (data?.paymentStatus === 'PAID' || data?.status === 'SUCCESS') {
               return;
             }
-
-            await handlePaymentSuccess(verification.reference || paymentRef, orderNumber);
-          })();
-        },
-        onClose: function () {
-          // Re-enable button on cancellation/close so user can retry with the same saved order reference
-          isSubmittingRef.current = false;
-          setProcessing(false);
-          setPaymentNotice(
-            'Payment window was closed. Your cart items are saved — please click below to retry whenever you are ready.'
-          );
-        },
-      });
-
-      if (!handler || typeof handler.openIframe !== 'function') {
-        throw new Error('PaystackPop setup did not return a valid handler object with openIframe');
+            isSubmittingRef.current = false;
+            setProcessing(false);
+            setPaymentNotice(
+              'Payment window was closed. Your cart items are saved — please click below to retry whenever you are ready.'
+            );
+          },
+        });
+        return;
+      } catch (monnifyErr: unknown) {
+        console.error('[Monnify Checkout] Error opening Monnify modal:', monnifyErr);
       }
-
-      handler.openIframe();
-    } catch (paystackErr: unknown) {
-      console.error('[Paystack Checkout] Error opening Paystack iframe popup:', paystackErr);
-      isSubmittingRef.current = false;
-      setProcessing(false);
-      const errMsg = paystackErr instanceof Error ? paystackErr.message : String(paystackErr);
-      setPaymentNotice(
-        `Could not open Paystack payment modal (${errMsg}). Please make sure popups and third-party frames are allowed in your browser, or open this application in a new browser tab.`
-      );
     }
+
+    isSubmittingRef.current = false;
+    setProcessing(false);
+    setPaymentNotice(
+      initResult.message ||
+        'Monnify checkout is not yet configured. Please set MONNIFY_API_KEY, MONNIFY_SECRET_KEY, MONNIFY_CONTRACT_CODE, and VITE_MONNIFY_API_KEY in your environment variables.'
+    );
   };
 
   const paymentMethods: { id: PaymentMethod; label: string; description: string; icon: typeof CreditCard }[] = [
@@ -702,11 +734,11 @@ export default function CheckoutPage() {
               <div>
                 <h2 className="font-display text-lg font-medium text-berry-800">3. Payment method</h2>
                 <p className="mt-1 text-xs text-berry-400">
-                  Powered by Paystack. Real-time encryption for Nigerian debit cards, bank transfers & USSD.
+                  Powered by Monnify. Real-time encryption for Nigerian debit cards, bank transfers & USSD.
                 </p>
               </div>
               <span className="inline-flex items-center gap-1 rounded-full bg-sage-50 px-2.5 py-1 text-[0.7rem] font-semibold text-sage-700">
-                <Lock className="h-3 w-3" /> Secure Paystack
+                <Lock className="h-3 w-3" /> Secure Monnify
               </span>
             </div>
 
@@ -748,7 +780,7 @@ export default function CheckoutPage() {
 
             <div className="mt-4 flex items-center gap-2 text-xs text-berry-400">
               <Lock className="h-3.5 w-3.5 text-blush-400" />
-              <span>We never store your card numbers or banking PINs. All payments are verified securely via Paystack.</span>
+              <span>We never store your card numbers or banking PINs. All payments are verified securely via Monnify.</span>
             </div>
           </section>
         </div>

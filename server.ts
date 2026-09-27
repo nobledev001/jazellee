@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import crypto from 'crypto';
 import { createServer as createViteServer } from 'vite';
+import { getMonnifyAccessToken } from './src/lib/monnify';
 
 interface RequestWithRawBody extends express.Request {
   rawBody?: Buffer;
@@ -123,54 +124,564 @@ async function startServer() {
   // CORS / headers for internal APIs
   app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Paystack-Signature');
+    res.header(
+      'Access-Control-Allow-Headers',
+      'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Paystack-Signature, monnify-signature'
+    );
     if (req.method === 'OPTIONS') {
       return res.sendStatus(200);
     }
     next();
   });
 
+  function getMonnifyServerConfig() {
+    const apiKey = (process.env.MONNIFY_API_KEY || process.env.VITE_MONNIFY_API_KEY || '').trim();
+    const secretKey = (process.env.MONNIFY_SECRET_KEY || '').trim();
+    const contractCode = (process.env.MONNIFY_CONTRACT_CODE || process.env.VITE_MONNIFY_CONTRACT_CODE || '').trim();
+    const explicitBase = (process.env.MONNIFY_BASE_URL || '').trim().replace(/\/+$/, '');
+    const explicitTest = (process.env.VITE_MONNIFY_IS_TEST_MODE || '').trim().toLowerCase();
+    const isTestMode =
+      explicitTest === 'false' || explicitTest === '0'
+        ? false
+        : explicitTest === 'true' || explicitTest === '1'
+        ? true
+        : !apiKey.startsWith('MK_PROD_');
+    const baseUrl = explicitBase || (isTestMode ? 'https://sandbox.monnify.com' : 'https://api.monnify.com');
+    return { apiKey, secretKey, contractCode, isTestMode, baseUrl };
+  }
+
+  /**
+   * Shared server-side order lookup, catalog price lookup, coupon validation,
+   * and delivery threshold recalculation used by both Monnify transaction initialization
+   * and post-payment verification.
+   */
+  async function recalculateServerOrderTotal(
+    cleanRef: string,
+    contact?: string
+  ): Promise<
+    | {
+        ok: true;
+        orderRow: Record<string, unknown>;
+        serverSubtotal: number;
+        serverDiscountAmount: number;
+        serverDeliveryFee: number;
+        serverExpectedTotalNaira: number;
+      }
+    | {
+        ok: false;
+        httpStatus: number;
+        status: string;
+        message: string;
+        extra?: Record<string, unknown>;
+      }
+  > {
+    const { supabaseUrl, supabaseKey, hasServiceRole } = getSupabaseConfig();
+    if (!supabaseUrl || !supabaseKey) {
+      return {
+        ok: false,
+        httpStatus: 500,
+        status: 'config_missing',
+        message: 'Supabase URL or key is missing on server.',
+      };
+    }
+
+    // 1. Look up the actual order in Supabase by paymentReference (order_number)
+    let orderRow: Record<string, unknown> | null = null;
+    if (hasServiceRole) {
+      const ordResp = await fetch(
+        `${supabaseUrl}/rest/v1/orders?order_number=eq.${encodeURIComponent(cleanRef)}&select=*`,
+        {
+          headers: {
+            apikey: supabaseKey,
+            Authorization: `Bearer ${supabaseKey}`,
+          },
+        }
+      );
+      if (ordResp.ok) {
+        const rows = (await ordResp.json()) as Array<Record<string, unknown>>;
+        if (Array.isArray(rows) && rows.length > 0) {
+          orderRow = rows[0];
+        }
+      }
+    }
+
+    if (!orderRow) {
+      const trackResp = await fetch(`${supabaseUrl}/rest/v1/rpc/track_order`, {
+        method: 'POST',
+        headers: {
+          apikey: supabaseKey,
+          Authorization: `Bearer ${supabaseKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          p_order_number: cleanRef,
+          p_contact: typeof contact === 'string' ? contact : '',
+        }),
+      });
+      if (trackResp.ok) {
+        const tracked = await trackResp.json();
+        if (tracked && typeof tracked === 'object' && !Array.isArray(tracked)) {
+          orderRow = tracked as Record<string, unknown>;
+        } else if (Array.isArray(tracked) && tracked.length > 0) {
+          orderRow = tracked[0] as Record<string, unknown>;
+        }
+      }
+    }
+
+    if (!orderRow) {
+      return {
+        ok: false,
+        httpStatus: 404,
+        status: 'order_not_found',
+        message: `Order "${cleanRef}" was not found in the database.`,
+      };
+    }
+
+    // 2. Recalculate true expected total server-side from public.products, public.coupons, and public.site_settings
+    const orderItems = Array.isArray(orderRow.items)
+      ? (orderRow.items as Array<{ id?: string; slug?: string; name?: string; quantity?: number }>)
+      : [];
+    if (orderItems.length === 0) {
+      return {
+        ok: false,
+        httpStatus: 400,
+        status: 'invalid_order_items',
+        message: 'Order contains no line items.',
+      };
+    }
+
+    const prodResp = await fetch(`${supabaseUrl}/rest/v1/products?select=id,slug,name,price,stock`, {
+      headers: {
+        apikey: supabaseKey,
+        Authorization: `Bearer ${supabaseKey}`,
+      },
+    });
+    const dbProducts = prodResp.ok
+      ? ((await prodResp.json()) as Array<{ id?: string; slug?: string; name?: string; price: number; stock?: number }>)
+      : [];
+
+    if (!Array.isArray(dbProducts) || dbProducts.length === 0) {
+      return {
+        ok: false,
+        httpStatus: 500,
+        status: 'catalog_lookup_failed',
+        message: 'Unable to load product catalog from database for server-side price calculation.',
+      };
+    }
+
+    let serverSubtotal = 0;
+    for (const item of orderItems) {
+      const qty = Math.floor(Number(item.quantity) || 0);
+      if (qty <= 0) {
+        return {
+          ok: false,
+          httpStatus: 400,
+          status: 'invalid_item_quantity',
+          message: `Invalid item quantity for "${item.name || item.slug}".`,
+        };
+      }
+
+      const matchedProduct = dbProducts.find(
+        (p) => (item.slug && p.slug === item.slug) || (item.id && p.id === item.id)
+      );
+      if (!matchedProduct) {
+        return {
+          ok: false,
+          httpStatus: 400,
+          status: 'unknown_product',
+          message: `Product "${item.slug || item.name}" does not exist in the catalog.`,
+        };
+      }
+      serverSubtotal += Number(matchedProduct.price) * qty;
+    }
+
+    // 3. Re-validate coupon server-side if attached
+    let serverDiscountAmount = 0;
+    const rawCouponCode = orderRow.coupon_code ? String(orderRow.coupon_code).trim().toUpperCase() : '';
+
+    if (rawCouponCode) {
+      let couponValid = false;
+      let discountType = 'percentage';
+      let discountValue = 0;
+      let couponFailureReason = `Security Check Failed: Promo code "${rawCouponCode}" is invalid, expired, or has reached its usage limit.`;
+
+      if (hasServiceRole) {
+        const coupResp = await fetch(
+          `${supabaseUrl}/rest/v1/coupons?code=ilike.${encodeURIComponent(rawCouponCode)}&select=*`,
+          {
+            headers: {
+              apikey: supabaseKey,
+              Authorization: `Bearer ${supabaseKey}`,
+            },
+          }
+        );
+        if (coupResp.ok) {
+          const coupRows = (await coupResp.json()) as Array<Record<string, unknown>>;
+          const couponRow = coupRows?.[0];
+          if (couponRow && couponRow.is_active === true) {
+            const notExpired =
+              !couponRow.expiry_date || new Date(String(couponRow.expiry_date)).getTime() >= Date.now();
+            const usageLimit =
+              couponRow.usage_limit !== null && couponRow.usage_limit !== undefined
+                ? Number(couponRow.usage_limit)
+                : null;
+            const usedCount = Number(couponRow.used_count || 0);
+            const underLimit = usageLimit === null || usageLimit <= 0 || usedCount < usageLimit;
+            if (notExpired && underLimit) {
+              couponValid = true;
+              discountType = String(couponRow.discount_type || 'percentage');
+              discountValue = Number(couponRow.discount_value || 0);
+            }
+          }
+        }
+      } else {
+        const rpcResp = await fetch(`${supabaseUrl}/rest/v1/rpc/validate_coupon`, {
+          method: 'POST',
+          headers: {
+            apikey: supabaseKey,
+            Authorization: `Bearer ${supabaseKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ p_code: rawCouponCode }),
+        });
+        if (rpcResp.ok) {
+          const rpcResult = (await rpcResp.json()) as {
+            valid?: boolean;
+            discount_type?: string;
+            discount_value?: number;
+            message?: string;
+          } | null;
+          if (rpcResult && rpcResult.valid === true) {
+            couponValid = true;
+            discountType = String(rpcResult.discount_type || 'percentage');
+            discountValue = Number(rpcResult.discount_value || 0);
+          } else if (rpcResult?.message) {
+            couponFailureReason = `Security Check Failed: ${rpcResult.message}`;
+          }
+        }
+      }
+
+      if (!couponValid) {
+        return {
+          ok: false,
+          httpStatus: 400,
+          status: 'invalid_coupon',
+          message: couponFailureReason,
+        };
+      }
+
+      if (discountType === 'percentage') {
+        serverDiscountAmount = Math.min(
+          serverSubtotal,
+          Math.round((serverSubtotal * discountValue) / 100)
+        );
+      } else {
+        serverDiscountAmount = Math.min(serverSubtotal, Math.max(0, Math.round(discountValue)));
+      }
+    }
+
+    const settingsResp = await fetch(
+      `${supabaseUrl}/rest/v1/site_settings?key=eq.free_delivery_threshold&select=value`,
+      {
+        headers: {
+          apikey: supabaseKey,
+          Authorization: `Bearer ${supabaseKey}`,
+        },
+      }
+    );
+    const settingsRows = settingsResp.ok
+      ? ((await settingsResp.json()) as Array<{ value?: string }>)
+      : [];
+    const parsedThreshold = settingsRows?.[0]?.value ? Number(settingsRows[0].value) : NaN;
+    const freeDeliveryThreshold =
+      Number.isFinite(parsedThreshold) && parsedThreshold >= 0
+        ? parsedThreshold
+        : DEFAULT_FREE_DELIVERY_THRESHOLD;
+
+    const serverDeliveryFee =
+      serverSubtotal === 0 || serverSubtotal >= freeDeliveryThreshold ? 0 : DEFAULT_DELIVERY_FEE;
+    const serverExpectedTotalNaira = Math.max(0, serverSubtotal - serverDiscountAmount) + serverDeliveryFee;
+
+    const clientOrderDiscount = Math.round(Number(orderRow.discount_amount || 0));
+    const clientOrderTotalNaira = Math.round(Number(orderRow.total || 0));
+
+    if (
+      Math.abs(clientOrderDiscount - serverDiscountAmount) > 1 ||
+      Math.abs(clientOrderTotalNaira - serverExpectedTotalNaira) > 1
+    ) {
+      return {
+        ok: false,
+        httpStatus: 400,
+        status: 'amount_mismatch',
+        message: `Security Verification Rejected: Tampered discount or order total detected. Client submitted discount ₦${clientOrderDiscount.toLocaleString()} (total ₦${clientOrderTotalNaira.toLocaleString()}), but server calculated discount ₦${serverDiscountAmount.toLocaleString()} (true expected total ₦${serverExpectedTotalNaira.toLocaleString()}).`,
+        extra: {
+          serverExpectedNaira: serverExpectedTotalNaira,
+          serverDiscountAmount,
+        },
+      };
+    }
+
+    return {
+      ok: true,
+      orderRow,
+      serverSubtotal,
+      serverDiscountAmount,
+      serverDeliveryFee,
+      serverExpectedTotalNaira,
+    };
+  }
+
   // Health check
   app.get('/api/health', (_req, res) => {
+    const monnifyCfg = getMonnifyServerConfig();
     res.json({
       status: 'ok',
       service: 'Jazelle Skin Haven Full-Stack API',
-      paystackKeyConfigured: Boolean(process.env.PAYSTACK_SECRET_KEY),
+      monnifyConfigured: Boolean(monnifyCfg.apiKey && monnifyCfg.secretKey && monnifyCfg.contractCode),
       resendKeyConfigured: Boolean(process.env.RESEND_API_KEY),
-      webhookEndpoint: '/api/paystack-webhook',
+      monnifyWebhookEndpoint: '/api/monnify-webhook',
       timestamp: new Date().toISOString(),
     });
   });
 
-  // Secure Paystack Verification API (Called from client post-payment)
-  app.post(['/api/verify-paystack', '/api/paystack/verify'], async (req, res) => {
+  // ============================================================
+  // MONNIFY INITIALIZE TRANSACTION API (Called on checkout submit)
+  // 1. Calculates true order total server-side (reusing recalculateServerOrderTotal)
+  // 2. Calls Monnify's Initialize Transaction API with server-calculated amount,
+  //    unique paymentReference (reusing order_number), and paymentMethods: ["CARD", "PAY_WITH_BANK"]
+  // ============================================================
+  app.post(['/api/monnify/initialize', '/api/initialize-monnify'], async (req, res) => {
+    try {
+      const {
+        orderNumber,
+        paymentReference,
+        customerName,
+        customerEmail,
+        customerPhone,
+        redirectUrl,
+        paymentDescription,
+        paymentMethods,
+        metadata,
+      } = req.body || {};
+
+      const rawRef = paymentReference || orderNumber;
+      if (!rawRef || typeof rawRef !== 'string') {
+        return res.status(400).json({
+          initialized: false,
+          status: 'invalid_reference',
+          message: 'Order reference (paymentReference) is required.',
+        });
+      }
+
+      const cleanRef = rawRef.trim();
+      if (cleanRef.length < 4 || cleanRef.length > 128 || !/^[a-zA-Z0-9_\-.:/|]+$/.test(cleanRef)) {
+        return res.status(400).json({
+          initialized: false,
+          status: 'invalid_reference',
+          message: 'Order reference must be between 4 and 128 valid characters.',
+        });
+      }
+
+      // 1. Server calculates the true order total using the shared price/coupon recalculation logic
+      const calcResult = await recalculateServerOrderTotal(
+        cleanRef,
+        typeof customerEmail === 'string' ? customerEmail.trim() : ''
+      );
+
+      if (!calcResult.ok) {
+        return res.status(calcResult.httpStatus).json({
+          initialized: false,
+          status: calcResult.status,
+          message: calcResult.message,
+          ...(calcResult.extra || {}),
+        });
+      }
+
+      const {
+        orderRow,
+        serverSubtotal,
+        serverDiscountAmount,
+        serverDeliveryFee,
+        serverExpectedTotalNaira,
+      } = calcResult;
+
+      const { apiKey, secretKey, contractCode, isTestMode, baseUrl } = getMonnifyServerConfig();
+      if (!apiKey || !secretKey || !contractCode) {
+        return res.status(500).json({
+          initialized: false,
+          status: 'config_missing',
+          amount: serverExpectedTotalNaira,
+          serverSubtotal,
+          serverDiscountAmount,
+          serverDeliveryFee,
+          apiKey: apiKey || undefined,
+          contractCode: contractCode || undefined,
+          isTestMode,
+          message:
+            'Monnify server credentials (MONNIFY_API_KEY, MONNIFY_SECRET_KEY, MONNIFY_CONTRACT_CODE) are not fully configured in environment variables.',
+        });
+      }
+
+      const accessToken = await getMonnifyAccessToken({ apiKey, secretKey, baseUrl });
+
+      const resolvedCustomerName =
+        (typeof customerName === 'string' && customerName.trim()) ||
+        String(orderRow.customer_name || 'Customer').trim();
+      const resolvedCustomerEmail =
+        (typeof customerEmail === 'string' && customerEmail.trim()) ||
+        String(orderRow.customer_email || '').trim();
+      const resolvedCustomerPhone =
+        (typeof customerPhone === 'string' && customerPhone.trim()) ||
+        String(orderRow.customer_phone || '').trim();
+
+      const originHeader =
+        req.headers.origin ||
+        (req.headers.host ? `${req.protocol}://${req.headers.host}` : 'http://localhost:3000');
+      const resolvedRedirectUrl =
+        typeof redirectUrl === 'string' && redirectUrl.trim()
+          ? redirectUrl.trim()
+          : `${originHeader}/order-confirmation?id=${encodeURIComponent(cleanRef)}&email=${encodeURIComponent(
+              resolvedCustomerEmail
+            )}`;
+
+      const requestedMethods =
+        Array.isArray(paymentMethods) && paymentMethods.length > 0
+          ? paymentMethods
+          : ['CARD', 'PAY_WITH_BANK'];
+
+      // 2. Call Monnify's Initialize Transaction API with server-calculated amount & paymentReference
+      const callInitTransaction = async (methodsToUse: string[]) => {
+        const initRes = await fetch(`${baseUrl}/api/v1/merchant/transactions/init-transaction`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            amount: serverExpectedTotalNaira,
+            customerName: resolvedCustomerName,
+            customerEmail: resolvedCustomerEmail,
+            paymentReference: cleanRef,
+            paymentDescription:
+              (typeof paymentDescription === 'string' && paymentDescription.trim()) ||
+              `Jazelle Skin Haven Order #${cleanRef}`,
+            currencyCode: 'NGN',
+            contractCode,
+            redirectUrl: resolvedRedirectUrl,
+            paymentMethods: methodsToUse,
+            metadata: {
+              order_number: cleanRef,
+              customer_phone: resolvedCustomerPhone,
+              ...(metadata && typeof metadata === 'object' ? metadata : {}),
+            },
+          }),
+        });
+        const raw = await initRes.text();
+        let parsed: Record<string, unknown> | null = null;
+        try {
+          parsed = JSON.parse(raw) as Record<string, unknown>;
+        } catch {
+          parsed = null;
+        }
+        return { initRes, raw, parsed };
+      };
+
+      let { initRes, parsed: initData } = await callInitTransaction(requestedMethods);
+
+      // Fallback if a specific sandbox contract requires ACCOUNT_TRANSFER alias for PAY_WITH_BANK
+      if (
+        (!initRes.ok || !initData?.requestSuccessful) &&
+        requestedMethods.includes('PAY_WITH_BANK')
+      ) {
+        const errMsg = String(initData?.responseMessage || '').toUpperCase();
+        if (errMsg.includes('PAYMENT_METHOD') || errMsg.includes('PAY_WITH_BANK') || errMsg.includes('INVALID')) {
+          const fallbackMethods = requestedMethods.map((m) =>
+            m === 'PAY_WITH_BANK' ? 'ACCOUNT_TRANSFER' : m
+          );
+          const retry = await callInitTransaction(fallbackMethods);
+          initRes = retry.initRes;
+          initData = retry.parsed;
+        }
+      }
+
+      if (!initRes.ok || !initData?.requestSuccessful || !initData?.responseBody) {
+        return res.status(400).json({
+          initialized: false,
+          status: String(initData?.responseCode || 'init_failed'),
+          message: String(
+            initData?.responseMessage || `Monnify could not initialize transaction (HTTP ${initRes.status})`
+          ),
+          amount: serverExpectedTotalNaira,
+          serverSubtotal,
+          serverDiscountAmount,
+          serverDeliveryFee,
+          apiKey,
+          contractCode,
+          isTestMode,
+          redirectUrl: resolvedRedirectUrl,
+        });
+      }
+
+      const body = initData.responseBody as Record<string, unknown>;
+      const checkoutUrl = String(body.checkoutUrl || '').trim();
+      const transactionReference = String(body.transactionReference || '').trim();
+
+      return res.status(200).json({
+        initialized: true,
+        checkoutUrl,
+        transactionReference,
+        paymentReference: cleanRef,
+        amount: serverExpectedTotalNaira,
+        serverSubtotal,
+        serverDiscountAmount,
+        serverDeliveryFee,
+        apiKey,
+        contractCode,
+        isTestMode,
+        redirectUrl: resolvedRedirectUrl,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Unknown error initializing Monnify transaction';
+      console.error('[Server Monnify Initialize] Error:', err);
+      return res.status(500).json({
+        initialized: false,
+        status: 'server_error',
+        message: msg,
+      });
+    }
+  });
+
+  // ============================================================
+  // SECURE MONNIFY VERIFICATION API (Called post-payment / on redirect return)
+  // ============================================================
+  app.post(['/api/verify-monnify', '/api/monnify/verify'], async (req, res) => {
     try {
       const clientIp = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown')
         .split(',')[0]
         .trim();
 
-      const { reference, orderNumber, contact } = req.body || {};
-      const rawRef = reference || orderNumber;
+      const { reference, paymentReference, transactionReference, orderNumber, contact } = req.body || {};
+      const rawRef = paymentReference || reference || orderNumber;
 
       if (!rawRef || typeof rawRef !== 'string') {
         return res.status(400).json({
           verified: false,
-          error: 'Transaction reference is required and must be a string',
-          message: 'Missing or invalid transaction reference parameter',
+          error: 'Payment reference is required and must be a string',
+          message: 'Missing or invalid payment reference parameter',
         });
       }
 
       const cleanRef = rawRef.trim();
-      if (cleanRef.length < 4 || cleanRef.length > 128 || !/^[a-zA-Z0-9_\-.:/]+$/.test(cleanRef)) {
+      if (cleanRef.length < 4 || cleanRef.length > 128 || !/^[a-zA-Z0-9_\-.:/|]+$/.test(cleanRef)) {
         return res.status(400).json({
           verified: false,
           error: 'Invalid reference format',
-          message: 'Reference must be between 4 and 128 alphanumeric characters',
+          message: 'Reference must be between 4 and 128 valid characters',
         });
       }
 
       // 1. Database-backed Rate Limiting: Max 5 attempts per 60s per reference, 15 per 60s per IP
-      const refLimit = await checkDatabaseRateLimit(`verify_paystack_ref:${cleanRef}`, 5, 60);
+      const refLimit = await checkDatabaseRateLimit(`verify_monnify_ref:${cleanRef}`, 5, 60);
       if (!refLimit.allowed) {
         res.setHeader('Retry-After', String(refLimit.resetInSec));
         return res.status(429).json({
@@ -183,7 +694,7 @@ async function startServer() {
         });
       }
 
-      const ipLimit = await checkDatabaseRateLimit(`verify_paystack_ip:${clientIp}`, 15, 60);
+      const ipLimit = await checkDatabaseRateLimit(`verify_monnify_ip:${clientIp}`, 15, 60);
       if (!ipLimit.allowed) {
         res.setHeader('Retry-After', String(ipLimit.resetInSec));
         return res.status(429).json({
@@ -197,321 +708,111 @@ async function startServer() {
       }
 
       const { supabaseUrl, supabaseKey, hasServiceRole } = getSupabaseConfig();
-      if (!supabaseUrl || !supabaseKey) {
-        return res.status(500).json({
-          verified: false,
-          status: 'config_missing',
-          message: 'Supabase URL or key is missing on server.',
-        });
-      }
 
-      // 2. Look up the actual order in Supabase by reference (order_number)
-      let orderRow: Record<string, unknown> | null = null;
-      if (hasServiceRole) {
-        const ordResp = await fetch(
-          `${supabaseUrl}/rest/v1/orders?order_number=eq.${encodeURIComponent(cleanRef)}&select=*`,
-          {
-            headers: {
-              apikey: supabaseKey,
-              Authorization: `Bearer ${supabaseKey}`,
-            },
-          }
-        );
-        if (ordResp.ok) {
-          const rows = (await ordResp.json()) as Array<Record<string, unknown>>;
-          if (Array.isArray(rows) && rows.length > 0) {
-            orderRow = rows[0];
-          }
-        }
-      }
-
-      if (!orderRow) {
-        // Fallback to track_order RPC if service_role is not in local env
-        const trackResp = await fetch(`${supabaseUrl}/rest/v1/rpc/track_order`, {
-          method: 'POST',
-          headers: {
-            apikey: supabaseKey,
-            Authorization: `Bearer ${supabaseKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            p_order_number: cleanRef,
-            p_contact: typeof contact === 'string' ? contact : '',
-          }),
-        });
-        if (trackResp.ok) {
-          const tracked = await trackResp.json();
-          if (tracked && typeof tracked === 'object' && !Array.isArray(tracked)) {
-            orderRow = tracked as Record<string, unknown>;
-          } else if (Array.isArray(tracked) && tracked.length > 0) {
-            orderRow = tracked[0] as Record<string, unknown>;
-          }
-        }
-      }
-
-      if (!orderRow) {
-        return res.status(404).json({
-          verified: false,
-          status: 'order_not_found',
-          message: `Order "${cleanRef}" was not found in the database.`,
-        });
-      }
-
-      // 3. Recalculate true expected total server-side from public.products, public.coupons, and public.site_settings
-      const orderItems = Array.isArray(orderRow.items)
-        ? (orderRow.items as Array<{ id?: string; slug?: string; name?: string; quantity?: number }>)
-        : [];
-      if (orderItems.length === 0) {
-        return res.status(400).json({
-          verified: false,
-          status: 'invalid_order_items',
-          message: 'Order contains no line items.',
-        });
-      }
-
-      const prodResp = await fetch(`${supabaseUrl}/rest/v1/products?select=id,slug,name,price,stock`, {
-        headers: {
-          apikey: supabaseKey,
-          Authorization: `Bearer ${supabaseKey}`,
-        },
-      });
-      const dbProducts = prodResp.ok
-        ? ((await prodResp.json()) as Array<{ id?: string; slug?: string; name?: string; price: number; stock?: number }>)
-        : [];
-
-      if (!Array.isArray(dbProducts) || dbProducts.length === 0) {
-        return res.status(500).json({
-          verified: false,
-          status: 'catalog_lookup_failed',
-          message: 'Unable to load product catalog from database for server-side price calculation.',
-        });
-      }
-
-      let serverSubtotal = 0;
-      for (const item of orderItems) {
-        const qty = Math.floor(Number(item.quantity) || 0);
-        if (qty <= 0) {
-          return res.status(400).json({
-            verified: false,
-            status: 'invalid_item_quantity',
-            message: `Invalid item quantity for "${item.name || item.slug}".`,
-          });
-        }
-
-        const matchedProduct = dbProducts.find(
-          (p) => (item.slug && p.slug === item.slug) || (item.id && p.id === item.id)
-        );
-        if (!matchedProduct) {
-          return res.status(400).json({
-            verified: false,
-            status: 'unknown_product',
-            message: `Product "${item.slug || item.name}" does not exist in the catalog.`,
-          });
-        }
-        serverSubtotal += Number(matchedProduct.price) * qty;
-      }
-
-      // Re-validate coupon server-side if attached
-      let serverDiscountAmount = 0;
-      const rawCouponCode = orderRow.coupon_code ? String(orderRow.coupon_code).trim().toUpperCase() : '';
-
-      if (rawCouponCode) {
-        let couponValid = false;
-        let discountType = 'percentage';
-        let discountValue = 0;
-        let couponFailureReason = `Security Check Failed: Promo code "${rawCouponCode}" is invalid, expired, or has reached its usage limit.`;
-
-        if (hasServiceRole) {
-          const coupResp = await fetch(
-            `${supabaseUrl}/rest/v1/coupons?code=ilike.${encodeURIComponent(rawCouponCode)}&select=*`,
-            {
-              headers: {
-                apikey: supabaseKey,
-                Authorization: `Bearer ${supabaseKey}`,
-              },
-            }
-          );
-          if (coupResp.ok) {
-            const coupRows = (await coupResp.json()) as Array<Record<string, unknown>>;
-            const couponRow = coupRows?.[0];
-            if (couponRow && couponRow.is_active === true) {
-              const notExpired =
-                !couponRow.expiry_date || new Date(String(couponRow.expiry_date)).getTime() >= Date.now();
-              const usageLimit =
-                couponRow.usage_limit !== null && couponRow.usage_limit !== undefined
-                  ? Number(couponRow.usage_limit)
-                  : null;
-              const usedCount = Number(couponRow.used_count || 0);
-              const underLimit = usageLimit === null || usageLimit <= 0 || usedCount < usageLimit;
-              if (notExpired && underLimit) {
-                couponValid = true;
-                discountType = String(couponRow.discount_type || 'percentage');
-                discountValue = Number(couponRow.discount_value || 0);
-              }
-            }
-          }
-        } else {
-          // Validate via SECURITY DEFINER RPC validate_coupon(p_code)
-          const rpcResp = await fetch(`${supabaseUrl}/rest/v1/rpc/validate_coupon`, {
-            method: 'POST',
-            headers: {
-              apikey: supabaseKey,
-              Authorization: `Bearer ${supabaseKey}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ p_code: rawCouponCode }),
-          });
-          if (rpcResp.ok) {
-            const rpcResult = (await rpcResp.json()) as {
-              valid?: boolean;
-              discount_type?: string;
-              discount_value?: number;
-              message?: string;
-            } | null;
-            if (rpcResult && rpcResult.valid === true) {
-              couponValid = true;
-              discountType = String(rpcResult.discount_type || 'percentage');
-              discountValue = Number(rpcResult.discount_value || 0);
-            } else if (rpcResult?.message) {
-              couponFailureReason = `Security Check Failed: ${rpcResult.message}`;
-            }
-          }
-        }
-
-        if (!couponValid) {
-          return res.status(400).json({
-            verified: false,
-            status: 'invalid_coupon',
-            message: couponFailureReason,
-          });
-        }
-
-        if (discountType === 'percentage') {
-          serverDiscountAmount = Math.min(
-            serverSubtotal,
-            Math.round((serverSubtotal * discountValue) / 100)
-          );
-        } else {
-          serverDiscountAmount = Math.min(serverSubtotal, Math.max(0, Math.round(discountValue)));
-        }
-      }
-
-      // Fetch free_delivery_threshold from site_settings
-      const settingsResp = await fetch(
-        `${supabaseUrl}/rest/v1/site_settings?key=eq.free_delivery_threshold&select=value`,
-        {
-          headers: {
-            apikey: supabaseKey,
-            Authorization: `Bearer ${supabaseKey}`,
-          },
-        }
+      // 2 & 3. Reuse server-side order lookup and price/coupon recalculation logic
+      const calcResult = await recalculateServerOrderTotal(
+        cleanRef,
+        typeof contact === 'string' ? contact : ''
       );
-      const settingsRows = settingsResp.ok
-        ? ((await settingsResp.json()) as Array<{ value?: string }>)
-        : [];
-      const parsedThreshold = settingsRows?.[0]?.value ? Number(settingsRows[0].value) : NaN;
-      const freeDeliveryThreshold =
-        Number.isFinite(parsedThreshold) && parsedThreshold >= 0
-          ? parsedThreshold
-          : DEFAULT_FREE_DELIVERY_THRESHOLD;
 
-      const serverDeliveryFee =
-        serverSubtotal === 0 || serverSubtotal >= freeDeliveryThreshold ? 0 : DEFAULT_DELIVERY_FEE;
-      const serverExpectedTotalNaira = Math.max(0, serverSubtotal - serverDiscountAmount) + serverDeliveryFee;
-      const serverExpectedKobo = Math.round(serverExpectedTotalNaira * 100);
-
-      // Detect if client tampered with order discount_amount or total before checkout
-      const clientOrderDiscount = Math.round(Number(orderRow.discount_amount || 0));
-      const clientOrderTotalNaira = Math.round(Number(orderRow.total || 0));
-
-      if (
-        Math.abs(clientOrderDiscount - serverDiscountAmount) > 1 ||
-        Math.abs(clientOrderTotalNaira - serverExpectedTotalNaira) > 1
-      ) {
-        return res.status(400).json({
+      if (!calcResult.ok) {
+        return res.status(calcResult.httpStatus).json({
           verified: false,
-          status: 'amount_mismatch',
-          message: `Security Verification Rejected: Tampered discount or order total detected. Client submitted discount ₦${clientOrderDiscount.toLocaleString()} (total ₦${clientOrderTotalNaira.toLocaleString()}), but server calculated discount ₦${serverDiscountAmount.toLocaleString()} (true expected total ₦${serverExpectedTotalNaira.toLocaleString()}).`,
-          serverExpectedTotalNaira,
-          serverDiscountAmount,
-          clientOrderTotalNaira,
-          clientOrderDiscount,
+          status: calcResult.status,
+          message: calcResult.message,
+          ...(calcResult.extra || {}),
         });
       }
 
-      const secretKey = process.env.PAYSTACK_SECRET_KEY?.trim();
+      const {
+        serverSubtotal,
+        serverDiscountAmount,
+        serverDeliveryFee,
+        serverExpectedTotalNaira,
+      } = calcResult;
 
-      if (!secretKey) {
-        console.error('[Server Paystack Verify] Error: PAYSTACK_SECRET_KEY is not set in environment variables');
+      // 4. Authenticate with Monnify & Verify Transaction
+      const { apiKey, secretKey, baseUrl } = getMonnifyServerConfig();
+      if (!apiKey || !secretKey) {
+        console.error('[Server Monnify Verify] MONNIFY_API_KEY or MONNIFY_SECRET_KEY is not configured');
         return res.status(500).json({
           verified: false,
           status: 'config_missing',
-          error: 'Server configuration error: PAYSTACK_SECRET_KEY is not configured',
-          message: 'Payment verification secret key is not set on the server.',
+          error: 'Server configuration error: MONNIFY_API_KEY or MONNIFY_SECRET_KEY is not configured',
+          message: 'Monnify API key and secret key are not configured on the server.',
         });
       }
 
-      const verifyUrl = `https://api.paystack.co/transaction/verify/${encodeURIComponent(cleanRef)}`;
+      const accessToken = await getMonnifyAccessToken({ apiKey, secretKey, baseUrl });
 
-      const paystackRes = await fetch(verifyUrl, {
+      const cleanTxRef =
+        typeof transactionReference === 'string' && transactionReference.trim()
+          ? transactionReference.trim()
+          : '';
+
+      const verifyUrl = cleanTxRef
+        ? `${baseUrl}/api/v2/transactions/${encodeURIComponent(cleanTxRef)}`
+        : `${baseUrl}/api/v1/merchant/transactions/query?paymentReference=${encodeURIComponent(cleanRef)}`;
+
+      const monnifyRes = await fetch(verifyUrl, {
         method: 'GET',
         headers: {
-          Authorization: `Bearer ${secretKey}`,
+          Authorization: `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
         },
       });
 
-      const rawText = await paystackRes.text();
-      let paystackData: Record<string, unknown> | null = null;
+      const rawText = await monnifyRes.text();
+      let monnifyData: Record<string, unknown> | null = null;
       try {
-        paystackData = JSON.parse(rawText) as Record<string, unknown>;
+        monnifyData = JSON.parse(rawText) as Record<string, unknown>;
       } catch {
         return res.status(400).json({
           verified: false,
-          status: 'paystack_api_error',
-          message: `Paystack API returned non-JSON response (HTTP ${paystackRes.status})`,
+          status: 'monnify_api_error',
+          message: `Monnify API returned non-JSON response (HTTP ${monnifyRes.status})`,
           rawResponse: rawText.slice(0, 300),
-          httpStatus: paystackRes.status,
+          httpStatus: monnifyRes.status,
         });
       }
 
-      if (!paystackRes.ok || !paystackData?.status) {
+      if (!monnifyRes.ok || !monnifyData?.requestSuccessful) {
         return res.status(400).json({
           verified: false,
-          status: (paystackData?.data as Record<string, unknown>)?.status || paystackData?.code || 'failed',
-          message: paystackData?.message || 'Transaction could not be verified by Paystack',
-          rawResponse: paystackData,
-          httpStatus: paystackRes.status,
+          status: String(monnifyData?.responseCode || 'failed'),
+          message: String(monnifyData?.responseMessage || 'Transaction could not be verified by Monnify'),
+          rawResponse: monnifyData,
+          httpStatus: monnifyRes.status,
         });
       }
 
-      const tx = (paystackData.data || {}) as Record<string, unknown>;
-      const isSuccess = tx.status === 'success';
-      if (!isSuccess) {
+      const tx = (monnifyData.responseBody || {}) as Record<string, unknown>;
+      const paymentStatus = String(tx.paymentStatus || '').toUpperCase();
+
+      if (paymentStatus !== 'PAID') {
         return res.status(400).json({
           verified: false,
-          status: String(tx.status || 'failed'),
-          message: `Payment status is "${tx.status}".`,
+          status: paymentStatus.toLowerCase() || 'failed',
+          message: `Monnify payment status is "${paymentStatus || 'UNKNOWN'}".`,
         });
       }
 
-      // Compare paid amount strictly against SERVER-CALCULATED total (never client expectedAmount)
-      const paidKobo = Number(tx.amount || 0);
-      if (Math.abs(paidKobo - serverExpectedKobo) > 100) {
+      const paidNaira = Number(tx.amountPaid ?? tx.totalPayable ?? 0);
+      if (Math.abs(paidNaira - serverExpectedTotalNaira) > 1) {
         return res.status(400).json({
           verified: false,
           status: 'amount_mismatch',
-          message: `Paid amount (₦${(paidKobo / 100).toLocaleString()}) does not match server-calculated order total (₦${serverExpectedTotalNaira.toLocaleString()})`,
-          paidKobo,
-          serverExpectedKobo,
+          message: `Amount mismatch: Monnify confirmed ₦${paidNaira.toLocaleString()}, but server-calculated order total is ₦${serverExpectedTotalNaira.toLocaleString()}.`,
+          amount: paidNaira,
+          serverExpectedNaira: serverExpectedTotalNaira,
         });
       }
 
-      if (tx.reference) {
-        processedReferences.add(String(tx.reference));
-      }
+      const resolvedRef = String(tx.paymentReference || cleanRef);
+      const resolvedTxRef = String(tx.transactionReference || cleanTxRef || cleanRef);
+      processedReferences.add(resolvedRef);
 
-      // 5. Finalize the order in Supabase server-side (status -> placed, payment_status -> paid, stock decrement, coupon used_count increment)
+      // 5. Finalize the order in Supabase server-side
       try {
         await fetch(`${supabaseUrl}/rest/v1/rpc/claim_order_stock_decrement`, {
           method: 'POST',
@@ -522,7 +823,7 @@ async function startServer() {
           },
           body: JSON.stringify({
             p_order_number: cleanRef,
-            p_payment_reference: String(tx.reference || cleanRef),
+            p_payment_reference: resolvedTxRef,
           }),
         });
 
@@ -545,42 +846,44 @@ async function startServer() {
           });
         }
       } catch (finErr) {
-        console.warn('[Server Paystack Verify] Order finalization RPC notice:', finErr);
+        console.warn('[Server Monnify Verify] Order finalization RPC notice:', finErr);
       }
 
       return res.status(200).json({
         verified: true,
-        status: tx.status,
-        reference: tx.reference,
-        amount: paidKobo,
-        serverExpectedKobo,
+        status: paymentStatus,
+        reference: resolvedRef,
+        transactionReference: resolvedTxRef,
+        amount: paidNaira,
+        serverExpectedNaira: serverExpectedTotalNaira,
         serverDiscountAmount,
-        channel: tx.channel,
-        paid_at: tx.paid_at,
+        channel: tx.paymentMethod,
+        paid_at: tx.paidOn || tx.createdOn,
         customer: tx.customer,
       });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Unknown server error';
-      console.error('[Server Paystack Verify] Unhandled error:', err);
+      console.error('[Server Monnify Verify] Unhandled error:', err);
       return res.status(500).json({
         error: `Server verification error: ${msg}`,
+        message: `Server verification error: ${msg}`,
         verified: false,
       });
     }
   });
 
   // ============================================================
-  // SECURE PAYSTACK WEBHOOK API (Backup verification & browser drop protection)
-  // Verifies x-paystack-signature with HMAC SHA512
-  // Enforces server-side database idempotency
+  // SECURE MONNIFY WEBHOOK API (Backup verification & browser drop protection)
+  // 1. Verifies monnify-signature header with HMAC SHA512 & timing-safe comparison
+  // 2. Runs server-side order recalculation & finalization logic
+  // 3. Returns 200 promptly to acknowledge receipt
   // ============================================================
-  app.post('/api/paystack-webhook', async (req: RequestWithRawBody, res) => {
+  app.post(['/api/monnify-webhook', '/api/webhooks/monnify'], async (req: RequestWithRawBody, res) => {
     try {
-      // Database-backed rate limit on webhook endpoint (max 30/minute per IP)
       const webhookIp = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown')
         .split(',')[0]
         .trim();
-      const webhookLimit = await checkDatabaseRateLimit(`paystack_webhook:${webhookIp}`, 30, 60);
+      const webhookLimit = await checkDatabaseRateLimit(`monnify_webhook:${webhookIp}`, 60, 60);
       if (!webhookLimit.allowed) {
         res.setHeader('Retry-After', String(webhookLimit.resetInSec));
         return res.status(429).json({
@@ -589,51 +892,76 @@ async function startServer() {
         });
       }
 
-      const secretKey = process.env.PAYSTACK_SECRET_KEY?.trim();
-
+      const { secretKey } = getMonnifyServerConfig();
       if (!secretKey) {
-        console.error('[Paystack Webhook] PAYSTACK_SECRET_KEY not configured');
+        console.error('[Monnify Webhook] MONNIFY_SECRET_KEY not configured');
         return res.status(500).json({ error: 'Server configuration error' });
       }
 
-      const signature = req.headers['x-paystack-signature'] as string | undefined;
-
+      const signature = (req.headers['monnify-signature'] as string | undefined)?.trim();
       if (!signature) {
-        console.warn('[Paystack Webhook] Missing x-paystack-signature header');
+        console.warn('[Monnify Webhook] Missing monnify-signature header');
         return res.status(401).json({ error: 'Missing webhook signature header' });
       }
 
-      // Compute HMAC SHA512 digest from raw request body
       const rawBody = req.rawBody || Buffer.from(JSON.stringify(req.body || {}));
       const expectedSignature = crypto.createHmac('sha512', secretKey).update(rawBody).digest('hex');
 
-      // Constant-time signature comparison to prevent timing attacks
-      const signatureBuffer = Buffer.from(signature);
-      const expectedBuffer = Buffer.from(expectedSignature);
+      const signatureBuffer = Buffer.from(signature.toLowerCase());
+      const expectedBuffer = Buffer.from(expectedSignature.toLowerCase());
 
       if (
         signatureBuffer.length !== expectedBuffer.length ||
         !crypto.timingSafeEqual(signatureBuffer, expectedBuffer)
       ) {
-        console.warn('[Paystack Webhook] Signature verification failed');
+        console.warn('[Monnify Webhook] Signature verification failed');
         return res.status(401).json({ error: 'Invalid webhook signature' });
       }
 
-      const event = req.body?.event;
-      const data = req.body?.data || {};
+      const eventType = req.body?.eventType || 'SUCCESSFUL_TRANSACTION';
+      const eventData = (req.body?.eventData || req.body?.data || req.body || {}) as Record<string, unknown>;
+      const paymentStatus = String(eventData.paymentStatus || '').toUpperCase();
+      const paymentReference = String(eventData.paymentReference || '').trim();
+      const transactionReference = String(eventData.transactionReference || paymentReference).trim();
+      const amountPaid = Number(eventData.amountPaid ?? eventData.totalPayable ?? 0);
 
-      console.log(`[Paystack Webhook] Verified event received: ${event} for reference: ${data.reference}`);
+      console.log(
+        `[Monnify Webhook] Verified event received: ${eventType} (${paymentStatus}) for paymentReference: ${paymentReference}`
+      );
 
-      if (event === 'charge.success') {
-        const reference = data.reference;
-
-        if (!reference || typeof reference !== 'string') {
-          return res.status(400).json({ error: 'Missing reference in webhook payload' });
+      if (eventType === 'SUCCESSFUL_TRANSACTION' && paymentStatus === 'PAID') {
+        if (!paymentReference) {
+          return res.status(400).json({ error: 'Missing paymentReference in webhook payload' });
         }
 
-        // Database-level idempotency check:
-        // Try to atomically claim stock decrement on the database
-        const { supabaseUrl, supabaseKey } = getSupabaseConfig();
+        const calcResult = await recalculateServerOrderTotal(paymentReference);
+        if (!calcResult.ok) {
+          if (calcResult.status === 'order_not_found') {
+            return res.status(200).json({ received: true, status: 'order_not_found' });
+          }
+          return res.status(calcResult.httpStatus).json({
+            error: calcResult.message,
+            status: calcResult.status,
+          });
+        }
+
+        const {
+          serverSubtotal,
+          serverDiscountAmount,
+          serverDeliveryFee,
+          serverExpectedTotalNaira,
+        } = calcResult;
+
+        if (Math.abs(amountPaid - serverExpectedTotalNaira) > 1) {
+          return res.status(400).json({
+            error: 'Amount mismatch against server-calculated order total',
+            status: 'amount_mismatch',
+            amountPaid,
+            serverExpectedTotalNaira,
+          });
+        }
+
+        const { supabaseUrl, supabaseKey, hasServiceRole } = getSupabaseConfig();
 
         try {
           const claimResp = await fetch(`${supabaseUrl}/rest/v1/rpc/claim_order_stock_decrement`, {
@@ -643,35 +971,63 @@ async function startServer() {
               Authorization: `Bearer ${supabaseKey}`,
               'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ p_order_number: reference, p_payment_ref: reference }),
+            body: JSON.stringify({
+              p_order_number: paymentReference,
+              p_payment_reference: transactionReference,
+            }),
           });
 
           if (claimResp.ok) {
             const claimed = await claimResp.json();
             if (claimed === false) {
               console.log(
-                `[Paystack Webhook Idempotency] Order ${reference} was already finalized and decremented in database. Skipping duplicate processing.`
+                `[Monnify Webhook Idempotency] Order ${paymentReference} was already finalized in database. Skipping duplicate processing.`
               );
-              return res.status(200).json({ status: 'ok', note: 'already_finalized_in_database' });
+              return res.status(200).json({ received: true, alreadyProcessed: true, reference: paymentReference });
             }
           }
+
+          if (hasServiceRole) {
+            await fetch(
+              `${supabaseUrl}/rest/v1/orders?order_number=eq.${encodeURIComponent(paymentReference)}`,
+              {
+                method: 'PATCH',
+                headers: {
+                  apikey: supabaseKey,
+                  Authorization: `Bearer ${supabaseKey}`,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  status: 'placed',
+                  subtotal: serverSubtotal,
+                  discount_amount: serverDiscountAmount,
+                  delivery_fee: serverDeliveryFee,
+                  total: serverExpectedTotalNaira,
+                  updated_at: new Date().toISOString(),
+                }),
+              }
+            );
+          }
         } catch (dbErr) {
-          console.warn('[Paystack Webhook] Database claim notice:', dbErr);
+          console.warn('[Monnify Webhook] Database claim notice:', dbErr);
         }
 
-        processedReferences.add(reference);
+        processedReferences.add(paymentReference);
 
         return res.status(200).json({
+          received: true,
+          finalized: true,
           status: 'success',
-          reference,
-          message: 'Payment confirmed and claimed via webhook',
+          reference: paymentReference,
+          transactionReference,
+          message: 'Payment confirmed and finalized via Monnify webhook',
         });
       }
 
-      return res.status(200).json({ status: 'ignored', event });
+      return res.status(200).json({ received: true, ignored: true, eventType, paymentStatus });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Unknown webhook error';
-      console.error('[Paystack Webhook] Error processing webhook:', err);
+      console.error('[Monnify Webhook] Error processing webhook:', err);
       return res.status(500).json({ error: msg });
     }
   });
