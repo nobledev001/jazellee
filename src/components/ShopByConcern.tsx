@@ -1,63 +1,53 @@
-import {
-  ArrowUpRight,
-  ShoppingBag,
-  Droplet,
-  Layers,
-  CircleDot,
-  Sun,
-  Feather,
-  type LucideIcon,
-} from 'lucide-react';
+import { ArrowUpRight, ShoppingBag } from 'lucide-react';
+import concernDarkSpotsImg from '@/assets/images/macro_skin_dark_spots_1790509837383.jpg';
+import concernDrySkinImg from '@/assets/images/macro_skin_dry_skin_1790509851867.jpg';
+import concernUnevenToneImg from '@/assets/images/macro_skin_uneven_tone_1790509862896.jpg';
+import concernBodyBumpsImg from '@/assets/images/macro_skin_body_bumps_1790509874175.jpg';
+import concernDullSkinImg from '@/assets/images/macro_skin_dull_skin_1790509883787.jpg';
+import concernSunProtectionImg from '@/assets/images/macro_skin_sun_protection_1790509895105.jpg';
+import concernSoftFreshImg from '@/assets/images/macro_skin_soft_fresh_1790509905630.jpg';
 
 interface Concern {
   question: string;
-  icon: LucideIcon;
+  image: string;
   href: string;
-  gradient: string;
 }
 
 const CONCERNS: Concern[] = [
   {
     question: 'Dark spots?',
-    icon: Sun,
+    image: concernDarkSpotsImg,
     href: '/shop?concern=dark-spots',
-    gradient: 'from-blush-100 to-blush-200',
   },
   {
     question: 'Dry skin?',
-    icon: Droplet,
+    image: concernDrySkinImg,
     href: '/shop?concern=dry-skin',
-    gradient: 'from-cream-200 to-cream-300',
   },
   {
     question: 'Uneven skin tone?',
-    icon: Layers,
+    image: concernUnevenToneImg,
     href: '/shop?concern=uneven-tone',
-    gradient: 'from-blush-100 to-rose-200',
   },
   {
     question: 'Body bumps?',
-    icon: CircleDot,
+    image: concernBodyBumpsImg,
     href: '/shop?concern=body-bumps',
-    gradient: 'from-rose-100 to-blush-200',
   },
   {
     question: 'Dull skin?',
-    icon: Sun,
+    image: concernDullSkinImg,
     href: '/shop?concern=dull-skin',
-    gradient: 'from-cream-100 to-blush-100',
   },
   {
     question: 'Need better sun protection?',
-    icon: Sun,
+    image: concernSunProtectionImg,
     href: '/shop?concern=sun-protection',
-    gradient: 'from-gold-100 to-cream-200',
   },
   {
     question: 'Just want to feel softer & fresher?',
-    icon: Feather,
+    image: concernSoftFreshImg,
     href: '/shop?concern=soft-fresh',
-    gradient: 'from-sage-100 to-cream-200',
   },
 ];
 
@@ -74,31 +64,34 @@ export default function ShopByConcern() {
           </p>
         </div>
 
-        {/* Concern Cards with refined 1.5 stroke icons in soft circular blush containers */}
+        {/* Concern Cards with editorial close-up Black skin imagery */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 sm:gap-5">
-          {CONCERNS.map((concern) => {
-            const Icon = concern.icon;
-            return (
-              <a
-                key={concern.question}
-                href={concern.href}
-                className={`group relative overflow-hidden rounded-4xl bg-gradient-to-br ${concern.gradient} p-4 sm:p-5 aspect-square flex flex-col justify-between transition-all duration-300 hover:shadow-soft-lg hover:-translate-y-1`}
-              >
-                <div className="flex items-start justify-between">
-                  {/* Well-proportioned soft circular blush background with consistent stroke-width 1.5 */}
-                  <div className="w-12 h-12 sm:w-13 sm:h-13 rounded-full bg-blush-100/90 border border-blush-200/70 shadow-xs flex items-center justify-center text-blush-600 group-hover:bg-white group-hover:text-blush-500 group-hover:shadow-soft transition-all duration-300">
-                    <Icon className="w-6 h-6 stroke-[1.5]" />
-                  </div>
-                  <div className="w-8 h-8 rounded-full bg-white/50 backdrop-blur-xs flex items-center justify-center text-blush-400 opacity-0 group-hover:opacity-100 group-hover:bg-white group-hover:text-blush-600 transition-all duration-200 shadow-xs">
-                    <ArrowUpRight className="w-4 h-4" />
-                  </div>
+          {CONCERNS.map((concern) => (
+            <a
+              key={concern.question}
+              href={concern.href}
+              className="group relative overflow-hidden rounded-4xl aspect-square flex flex-col justify-between p-4 sm:p-5 transition-all duration-300 hover:shadow-soft-lg hover:-translate-y-1 bg-berry-900"
+            >
+              <img
+                src={concern.image}
+                alt={concern.question}
+                referrerPolicy="no-referrer"
+                loading="lazy"
+                className="absolute inset-0 w-full h-full object-cover transition-transform duration-500 ease-out group-hover:scale-105"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/20 to-black/5 group-hover:from-black/80 transition-colors duration-300" />
+
+              <div className="relative z-10 flex items-start justify-end">
+                <div className="w-8 h-8 rounded-full bg-white/80 backdrop-blur-xs flex items-center justify-center text-berry-800 opacity-90 group-hover:opacity-100 group-hover:bg-white group-hover:text-blush-600 transition-all duration-200 shadow-xs">
+                  <ArrowUpRight className="w-4 h-4" />
                 </div>
-                <p className="font-display text-base sm:text-lg font-medium text-berry-800 leading-snug text-balance group-hover:text-blush-700 transition-colors">
-                  {concern.question}
-                </p>
-              </a>
-            );
-          })}
+              </div>
+
+              <p className="relative z-10 font-display text-base sm:text-lg font-medium text-white leading-snug text-balance drop-shadow-xs">
+                {concern.question}
+              </p>
+            </a>
+          ))}
 
           {/* CTA card */}
           <a

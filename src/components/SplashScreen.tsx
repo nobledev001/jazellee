@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import jazelleWordmark from '@/assets/images/jazelle_wordmark_transparent.png';
+import jazelleSplashLogo from '@/assets/images/jazelle_splash_logo.png';
 
 export default function SplashScreen({ onComplete }: { onComplete: () => void }) {
   const [shouldShow, setShouldShow] = useState(true);
@@ -20,24 +20,19 @@ export default function SplashScreen({ onComplete }: { onComplete: () => void })
   if (!shouldShow) return null;
 
   return (
-    <div className={`fixed inset-0 z-[100] flex items-center justify-center overflow-hidden bg-cream-50 transition-opacity duration-700 ${leaving ? 'opacity-0' : 'opacity-100'}`}>
-      <div
-        className="absolute inset-0 opacity-0 animate-splash-pattern"
-        style={{
-          backgroundImage: "url('/assets/images/brand_pattern.jpg')",
-          backgroundSize: '260px 260px',
-          backgroundPosition: 'center',
-          backgroundRepeat: 'repeat',
-        }}
-      />
+    <div
+      className={`fixed inset-0 z-[100] flex items-center justify-center overflow-hidden bg-white transition-opacity duration-700 ${
+        leaving ? 'opacity-0' : 'opacity-100'
+      }`}
+    >
       <div className="relative flex flex-col items-center px-6 max-w-lg w-full">
         <img
-          src={jazelleWordmark}
+          src={jazelleSplashLogo}
           alt="Jazelle Skin Haven"
-          className="w-full max-w-[320px] sm:max-w-[400px] h-auto object-contain opacity-0 animate-splash-badge drop-shadow-sm select-none"
+          className="w-64 h-64 sm:w-80 sm:h-80 md:w-96 md:h-96 object-contain opacity-0 animate-splash-badge select-none"
         />
 
-        <p className="mt-5 text-xs sm:text-sm font-medium uppercase tracking-[0.26em] text-berry-600 opacity-0 animate-splash-subtitle text-center">
+        <p className="mt-6 text-xs sm:text-sm font-medium uppercase tracking-[0.26em] text-berry-600 opacity-0 animate-splash-subtitle text-center">
           Self-Care &bull; Skincare &bull; Nationwide
         </p>
       </div>
