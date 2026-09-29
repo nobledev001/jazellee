@@ -11,9 +11,22 @@ import {
   Clock,
   CheckCircle2,
   AlertTriangle,
+  Truck,
+  Bus,
+  Send,
+  ExternalLink,
 } from 'lucide-react';
 import { supabase, type DbOrder } from '../supabase';
-import { sendShippingUpdateEmail } from '@/lib/email';
+import { sendShippingUpdateEmail, sendOrderTrackingEmail } from '@/lib/email';
+import {
+  extractOrderDeliveryInfo,
+  formatAdminDeliverySummary,
+  getDeliveryMethodLabel,
+  encodeDeliveryMetadataInLandmark,
+  FEZ_TRACKING_URL,
+  JUMIA_TRACKING_URL,
+  type DeliveryMethodId,
+} from '@/lib/delivery';
 
 export default function AdminOrders() {
   const [orders, setOrders] = useState<DbOrder[]>([]);
@@ -27,7 +40,26 @@ export default function AdminOrders() {
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [sendingReminderId, setSendingReminderId] = useState<string | null>(null);
 
+  // Tracking number & delivery method management inside Order Detail modal
+  const [trackingInput, setTrackingInput] = useState('');
+  const [modalDeliveryMethod, setModalDeliveryMethod] = useState<DeliveryMethodId>('standard');
+  const [modalParkName, setModalParkName] = useState('');
+  const [modalParkLocation, setModalParkLocation] = useState('');
+  const [savingTracking, setSavingTracking] = useState(false);
+  const [trackingFeedback, setTrackingFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
   const prevCountRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (selectedOrder) {
+      const info = extractOrderDeliveryInfo(selectedOrder as unknown as Record<string, unknown>);
+      setTrackingInput(info.trackingNumber || '');
+      setModalDeliveryMethod(info.deliveryMethod);
+      setModalParkName(info.deliveryMethodDetails?.park_name || '');
+      setModalParkLocation(info.deliveryMethodDetails?.park_location || '');
+      setTrackingFeedback(null);
+    }
+  }, [selectedOrder]);
 
   const loadOrders = useCallback(async (isSilent = false) => {
     if (!isSilent) setLoading(true);
@@ -125,6 +157,141 @@ export default function AdminOrders() {
     loadOrders(true);
     if (selectedOrder && selectedOrder.id === orderId) {
       setSelectedOrder({ ...selectedOrder, status: nextStatus, payment_status: nextStatus !== 'pending' ? 'paid' : 'pending' });
+    }
+  };
+
+  const handleSaveTrackingNumber = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!selectedOrder) return;
+
+    const trimmedTracking = trackingInput.trim();
+    if (!trimmedTracking) {
+      setTrackingFeedback({
+        type: 'error',
+        message: 'Please enter a Tracking Number / Waybill before saving.',
+      });
+      return;
+    }
+
+    setSavingTracking(true);
+    setTrackingFeedback(null);
+
+    try {
+      const existingInfo = extractOrderDeliveryInfo(
+        selectedOrder as unknown as Record<string, unknown>
+      );
+      const effectiveMethod = modalDeliveryMethod || existingInfo.deliveryMethod;
+      const effectiveDetails =
+        effectiveMethod === 'motor_park'
+          ? {
+              park_name: modalParkName.trim() || existingInfo.deliveryMethodDetails?.park_name || '',
+              park_location:
+                modalParkLocation.trim() || existingInfo.deliveryMethodDetails?.park_location || '',
+            }
+          : existingInfo.deliveryMethodDetails || null;
+
+      // Embed delivery metadata in items[0] and landmark as a resilient fallback if columns are missing
+      const updatedItems = (selectedOrder.items || []).map((item, idx) =>
+        idx === 0
+          ? {
+              ...item,
+              delivery_method: effectiveMethod,
+              ...(effectiveDetails ? { delivery_method_details: effectiveDetails } : {}),
+              tracking_number: trimmedTracking,
+            }
+          : item
+      );
+
+      const updatedLandmark = encodeDeliveryMetadataInLandmark(
+        existingInfo.cleanLandmark,
+        effectiveMethod,
+        effectiveDetails,
+        trimmedTracking
+      );
+
+      const nextStatus =
+        selectedOrder.status === 'placed' || selectedOrder.status === 'processing'
+          ? 'shipped'
+          : selectedOrder.status;
+
+      const fullUpdatePayload: Record<string, unknown> = {
+        tracking_number: trimmedTracking,
+        delivery_method: effectiveMethod,
+        delivery_method_details: effectiveDetails,
+        items: updatedItems,
+        delivery_landmark: updatedLandmark,
+        status: nextStatus,
+        updated_at: new Date().toISOString(),
+      };
+
+      const { error: updateErr } = await supabase
+        .from('orders')
+        .update(fullUpdatePayload)
+        .eq('id', selectedOrder.id);
+
+      if (updateErr) {
+        // Fallback if tracking_number / delivery_method columns are not yet migrated on remote DB
+        const fallbackPayload: Record<string, unknown> = {
+          items: updatedItems,
+          delivery_landmark: updatedLandmark,
+          status: nextStatus,
+          updated_at: new Date().toISOString(),
+        };
+        const { error: fallbackErr } = await supabase
+          .from('orders')
+          .update(fallbackPayload)
+          .eq('id', selectedOrder.id);
+        if (fallbackErr) throw fallbackErr;
+      }
+
+      // Automatically trigger tracking email to customer via Resend
+      let emailDispatched = false;
+      if (selectedOrder.customer_email) {
+        const emailRes = await sendOrderTrackingEmail({
+          order_number: selectedOrder.order_number,
+          customer_name: selectedOrder.customer_name,
+          customer_email: selectedOrder.customer_email,
+          delivery_method: effectiveMethod,
+          delivery_method_details: effectiveDetails,
+          tracking_number: trimmedTracking,
+          delivery_address: selectedOrder.delivery_address,
+          delivery_state: selectedOrder.delivery_state,
+          delivery_lga: selectedOrder.delivery_lga,
+          items: selectedOrder.items || [],
+          total: selectedOrder.total,
+        });
+        emailDispatched = emailRes.ok;
+      }
+
+      const updatedOrder: DbOrder = {
+        ...selectedOrder,
+        tracking_number: trimmedTracking,
+        delivery_method: effectiveMethod,
+        delivery_method_details: effectiveDetails,
+        items: updatedItems,
+        delivery_landmark: updatedLandmark,
+        status: nextStatus,
+      };
+
+      setSelectedOrder(updatedOrder);
+      setOrders((prev) => prev.map((o) => (o.id === updatedOrder.id ? updatedOrder : o)));
+      loadOrders(true);
+
+      const msg = emailDispatched
+        ? `Tracking number (${trimmedTracking}) saved & tracking email sent to ${selectedOrder.customer_email}!`
+        : `Tracking number (${trimmedTracking}) saved on order ${selectedOrder.order_number}.`;
+
+      setTrackingFeedback({ type: 'success', message: msg });
+      setActionNotice(msg);
+      setTimeout(() => setActionNotice(null), 5000);
+    } catch (err) {
+      console.error('[AdminOrders] Error saving tracking number:', err);
+      setTrackingFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Failed to save tracking number.',
+      });
+    } finally {
+      setSavingTracking(false);
     }
   };
 
@@ -624,6 +791,14 @@ export default function AdminOrders() {
                           <td className="px-6 py-4 text-xs">
                             <div>{order.delivery_state}</div>
                             <div className="text-gray-400">{order.delivery_lga}</div>
+                            <div className="mt-1 inline-flex items-center gap-1 rounded bg-pink-50 px-1.5 py-0.5 text-[11px] font-medium text-pink-800 border border-pink-100">
+                              <Truck className="w-3 h-3 shrink-0" />
+                              <span>
+                                {getDeliveryMethodLabel(
+                                  extractOrderDeliveryInfo(order as unknown as Record<string, unknown>).deliveryMethod
+                                )}
+                              </span>
+                            </div>
                           </td>
                           <td className="px-6 py-4 font-semibold text-gray-900 whitespace-nowrap">₦{order.total.toLocaleString()}</td>
                           <td className="px-6 py-4 whitespace-nowrap">
@@ -756,15 +931,243 @@ export default function AdminOrders() {
               </div>
             )}
 
-            <div>
-              <h4 className="text-xs font-semibold uppercase text-gray-400 tracking-wider">Customer & Delivery</h4>
-              <p className="text-sm font-medium text-gray-900 mt-1">{selectedOrder.customer_name} ({selectedOrder.customer_phone})</p>
-              <p className="text-xs text-gray-500 break-all">{selectedOrder.customer_email}</p>
-              <p className="text-xs text-gray-600 mt-1">{selectedOrder.delivery_address}, {selectedOrder.delivery_lga}, {selectedOrder.delivery_state}</p>
-              {selectedOrder.delivery_landmark && (
-                <p className="text-xs text-gray-400 italic">Landmark: {selectedOrder.delivery_landmark}</p>
-              )}
-            </div>
+            {(() => {
+              const orderDeliveryInfo = extractOrderDeliveryInfo(
+                selectedOrder as unknown as Record<string, unknown>
+              );
+              const deliverViaSummary = formatAdminDeliverySummary(
+                modalDeliveryMethod || orderDeliveryInfo.deliveryMethod,
+                modalDeliveryMethod === 'motor_park'
+                  ? {
+                      park_name:
+                        modalParkName || orderDeliveryInfo.deliveryMethodDetails?.park_name,
+                      park_location:
+                        modalParkLocation ||
+                        orderDeliveryInfo.deliveryMethodDetails?.park_location,
+                    }
+                  : orderDeliveryInfo.deliveryMethodDetails
+              );
+              const isTrackableCarrier =
+                modalDeliveryMethod === 'jumia' ||
+                modalDeliveryMethod === 'fez' ||
+                modalDeliveryMethod === 'motor_park';
+
+              return (
+                <>
+                  <div className="space-y-3">
+                    <h4 className="text-xs font-semibold uppercase text-gray-400 tracking-wider">
+                      Customer &amp; Delivery Fulfillment
+                    </h4>
+
+                    {/* Highlighted Deliver Via Banner */}
+                    <div className="rounded-xl border border-pink-200 bg-pink-50/70 p-3.5">
+                      <div className="flex items-start gap-2.5">
+                        {modalDeliveryMethod === 'motor_park' ? (
+                          <Bus className="h-4 w-4 text-pink-700 shrink-0 mt-0.5" />
+                        ) : (
+                          <Truck className="h-4 w-4 text-pink-700 shrink-0 mt-0.5" />
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-bold uppercase tracking-wider text-pink-900">
+                            Deliver via: {deliverViaSummary}
+                          </div>
+                          {modalDeliveryMethod === 'motor_park' && (
+                            <div className="mt-1.5 text-xs text-pink-800 space-y-0.5">
+                              {modalParkName && (
+                                <div>
+                                  <span className="font-semibold">Park / Bus Company:</span>{' '}
+                                  {modalParkName}
+                                </div>
+                              )}
+                              {modalParkLocation && (
+                                <div>
+                                  <span className="font-semibold">Destination City / Park Location:</span>{' '}
+                                  {modalParkLocation}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-gray-100 bg-gray-50/60 p-3 text-xs space-y-1">
+                      <p className="text-sm font-semibold text-gray-900">
+                        {selectedOrder.customer_name} ({selectedOrder.customer_phone})
+                      </p>
+                      <p className="text-gray-500 break-all">{selectedOrder.customer_email}</p>
+                      <p className="text-gray-700 pt-1">
+                        <span className="font-semibold text-gray-500">Address:</span>{' '}
+                        {selectedOrder.delivery_address}, {selectedOrder.delivery_lga},{' '}
+                        {selectedOrder.delivery_state}
+                      </p>
+                      {orderDeliveryInfo.cleanLandmark && (
+                        <p className="text-gray-500 italic">
+                          Landmark: {orderDeliveryInfo.cleanLandmark}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Tracking Number / Waybill Section (Relevant for Jumia, Fez, and Motor Park deliveries) */}
+                  <div className="rounded-xl border border-gray-200 bg-white p-4 space-y-3 shadow-2xs">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div>
+                        <h4 className="text-xs font-bold uppercase tracking-wider text-gray-800 flex items-center gap-1.5">
+                          <Truck className="h-3.5 w-3.5 text-pink-600" />
+                          <span>Dispatch &amp; Tracking / Waybill</span>
+                        </h4>
+                        <p className="text-[11px] text-gray-500 mt-0.5">
+                          Adding or updating a tracking number automatically emails the customer with carrier tracking instructions.
+                        </p>
+                      </div>
+                      <select
+                        value={modalDeliveryMethod}
+                        onChange={(e) => setModalDeliveryMethod(e.target.value as DeliveryMethodId)}
+                        className="rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-1.5 text-xs font-medium text-gray-700 focus:outline-none focus:border-pink-500"
+                        title="Delivery Method"
+                      >
+                        <option value="motor_park">Motor Park / Bus Pickup</option>
+                        <option value="jumia">Jumia Delivery</option>
+                        <option value="fez">Fez Delivery</option>
+                        <option value="standard">Standard Doorstep Delivery</option>
+                      </select>
+                    </div>
+
+                    {modalDeliveryMethod === 'motor_park' && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                        <div>
+                          <label className="block text-[11px] font-semibold text-gray-600 mb-1">
+                            Park / Bus Company Name
+                          </label>
+                          <input
+                            type="text"
+                            value={modalParkName}
+                            onChange={(e) => setModalParkName(e.target.value)}
+                            placeholder="e.g. GIGM, ABC Transport, GUO"
+                            className="w-full rounded-lg border border-gray-200 px-3 py-1.5 text-xs focus:outline-none focus:border-pink-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-gray-600 mb-1">
+                            Destination City / Park Location
+                          </label>
+                          <input
+                            type="text"
+                            value={modalParkLocation}
+                            onChange={(e) => setModalParkLocation(e.target.value)}
+                            placeholder="e.g. Utako Park, Abuja"
+                            className="w-full rounded-lg border border-gray-200 px-3 py-1.5 text-xs focus:outline-none focus:border-pink-500"
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {isTrackableCarrier ? (
+                      <form onSubmit={handleSaveTrackingNumber} className="space-y-2.5 pt-1">
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-700 mb-1">
+                            Tracking Number / Waybill ({getDeliveryMethodLabel(modalDeliveryMethod)})
+                          </label>
+                          <div className="flex flex-col sm:flex-row gap-2">
+                            <input
+                              type="text"
+                              value={trackingInput}
+                              onChange={(e) => setTrackingInput(e.target.value)}
+                              placeholder={
+                                modalDeliveryMethod === 'motor_park'
+                                  ? 'Enter bus waybill / driver phone / tag number…'
+                                  : modalDeliveryMethod === 'jumia'
+                                  ? 'Enter Jumia package tracking number…'
+                                  : 'Enter Fez Delivery waybill / tracking number…'
+                              }
+                              className="flex-1 rounded-lg border border-gray-200 px-3 py-2 text-xs font-mono focus:outline-none focus:border-pink-500"
+                            />
+                            <button
+                              type="submit"
+                              disabled={savingTracking}
+                              className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-pink-600 hover:bg-pink-500 text-white px-4 py-2 text-xs font-semibold shadow-xs transition-colors disabled:opacity-50 cursor-pointer shrink-0"
+                            >
+                              <Send className="h-3.5 w-3.5" />
+                              <span>
+                                {savingTracking
+                                  ? 'Saving & Emailing…'
+                                  : orderDeliveryInfo.trackingNumber
+                                  ? 'Update & Resend Email'
+                                  : 'Save & Email Tracking'}
+                              </span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {modalDeliveryMethod === 'jumia' && (
+                          <div className="flex items-center justify-between text-[11px] text-gray-500 bg-gray-50 px-3 py-1.5 rounded-lg">
+                            <span>Customer will receive Jumia tracking link:</span>
+                            <a
+                              href={JUMIA_TRACKING_URL}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-pink-600 font-semibold hover:underline"
+                            >
+                              <span>jumia.com.ng/tracking</span>
+                              <ExternalLink className="h-3 w-3" />
+                            </a>
+                          </div>
+                        )}
+
+                        {modalDeliveryMethod === 'fez' && (
+                          <div className="flex items-center justify-between text-[11px] text-gray-500 bg-gray-50 px-3 py-1.5 rounded-lg">
+                            <span>Customer will receive Fez tracking link:</span>
+                            <a
+                              href={FEZ_TRACKING_URL}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-pink-600 font-semibold hover:underline"
+                            >
+                              <span>fezdelivery.co/track</span>
+                              <ExternalLink className="h-3 w-3" />
+                            </a>
+                          </div>
+                        )}
+
+                        {modalDeliveryMethod === 'motor_park' && (
+                          <div className="text-[11px] text-gray-500 bg-gray-50 px-3 py-1.5 rounded-lg">
+                            Customer will receive waybill number &amp; pickup instructions for{' '}
+                            <span className="font-semibold text-gray-700">
+                              {modalParkName || 'the selected bus company'}
+                            </span>{' '}
+                            at{' '}
+                            <span className="font-semibold text-gray-700">
+                              {modalParkLocation || 'the destination park'}
+                            </span>
+                            .
+                          </div>
+                        )}
+
+                        {trackingFeedback && (
+                          <div
+                            className={`rounded-lg px-3 py-2 text-xs font-medium ${
+                              trackingFeedback.type === 'success'
+                                ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                                : 'bg-red-50 text-red-700 border border-red-200'
+                            }`}
+                          >
+                            {trackingFeedback.message}
+                          </div>
+                        )}
+                      </form>
+                    ) : (
+                      <p className="text-xs text-gray-500 bg-gray-50 rounded-lg p-3">
+                        This order uses <span className="font-semibold text-gray-700">Standard Doorstep Delivery</span>. Tracking numbers / waybills apply to{' '}
+                        <span className="font-medium">Jumia Delivery</span>,{' '}
+                        <span className="font-medium">Fez Delivery</span>, and{' '}
+                        <span className="font-medium">Motor Park / Bus Pickup</span> orders. (You can switch the delivery method dropdown above if dispatching via one of those carriers.)
+                      </p>
+                    )}
+                  </div>
+                </>
+              );
+            })()}
 
             <div>
               <h4 className="text-xs font-semibold uppercase text-gray-400 tracking-wider">Items Ordered</h4>

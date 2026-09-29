@@ -3,6 +3,11 @@ import path from 'path';
 import crypto from 'crypto';
 import { createServer as createViteServer } from 'vite';
 import { getMonnifyAccessToken } from './src/lib/monnify';
+import {
+  calculateDeliveryFee,
+  extractOrderDeliveryInfo,
+  normalizeDeliveryMethodId,
+} from './src/lib/delivery';
 
 interface RequestWithRawBody extends express.Request {
   rawBody?: Buffer;
@@ -35,9 +40,6 @@ function checkRateLimit(key: string, limit = 10, windowMs = 60000): { allowed: b
   bucket.count += 1;
   return { allowed: true, remaining: limit - bucket.count, resetInSec: Math.ceil((bucket.resetAt - now) / 1000) };
 }
-
-const DEFAULT_DELIVERY_FEE = 3500;
-const DEFAULT_FREE_DELIVERY_THRESHOLD = 35000;
 
 function getSupabaseConfig() {
   const supabaseUrl = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').trim();
@@ -157,7 +159,8 @@ async function startServer() {
    */
   async function recalculateServerOrderTotal(
     cleanRef: string,
-    contact?: string
+    contact?: string,
+    hintedDeliveryMethod?: string
   ): Promise<
     | {
         ok: true;
@@ -166,6 +169,7 @@ async function startServer() {
         serverDiscountAmount: number;
         serverDeliveryFee: number;
         serverExpectedTotalNaira: number;
+        deliveryMethod: string;
       }
     | {
         ok: false;
@@ -381,7 +385,7 @@ async function startServer() {
     }
 
     const settingsResp = await fetch(
-      `${supabaseUrl}/rest/v1/site_settings?key=eq.free_delivery_threshold&select=value`,
+      `${supabaseUrl}/rest/v1/site_settings?key=in.(free_delivery_threshold,standard_delivery_fee,delivery_fee_motor_park,delivery_fee_jumia,delivery_fee_fez)&select=key,value`,
       {
         headers: {
           apikey: supabaseKey,
@@ -390,16 +394,23 @@ async function startServer() {
       }
     );
     const settingsRows = settingsResp.ok
-      ? ((await settingsResp.json()) as Array<{ value?: string }>)
+      ? ((await settingsResp.json()) as Array<{ key?: string; value?: string }>)
       : [];
-    const parsedThreshold = settingsRows?.[0]?.value ? Number(settingsRows[0].value) : NaN;
-    const freeDeliveryThreshold =
-      Number.isFinite(parsedThreshold) && parsedThreshold >= 0
-        ? parsedThreshold
-        : DEFAULT_FREE_DELIVERY_THRESHOLD;
+    const settingsMap: Record<string, string | undefined> = {};
+    if (Array.isArray(settingsRows)) {
+      for (const row of settingsRows) {
+        if (row && typeof row.key === 'string') {
+          settingsMap[row.key] = row.value !== undefined ? String(row.value) : undefined;
+        }
+      }
+    }
 
-    const serverDeliveryFee =
-      serverSubtotal === 0 || serverSubtotal >= freeDeliveryThreshold ? 0 : DEFAULT_DELIVERY_FEE;
+    const extractedDelivery = extractOrderDeliveryInfo(orderRow);
+    const deliveryMethod = hintedDeliveryMethod
+      ? normalizeDeliveryMethodId(hintedDeliveryMethod)
+      : extractedDelivery.deliveryMethod;
+
+    const serverDeliveryFee = calculateDeliveryFee(deliveryMethod, serverSubtotal, settingsMap);
     const serverExpectedTotalNaira = Math.max(0, serverSubtotal - serverDiscountAmount) + serverDeliveryFee;
 
     const clientOrderDiscount = Math.round(Number(orderRow.discount_amount || 0));
@@ -413,10 +424,12 @@ async function startServer() {
         ok: false,
         httpStatus: 400,
         status: 'amount_mismatch',
-        message: `Security Verification Rejected: Tampered discount or order total detected. Client submitted discount ₦${clientOrderDiscount.toLocaleString()} (total ₦${clientOrderTotalNaira.toLocaleString()}), but server calculated discount ₦${serverDiscountAmount.toLocaleString()} (true expected total ₦${serverExpectedTotalNaira.toLocaleString()}).`,
+        message: `Security Verification Rejected: Tampered discount, delivery fee, or order total detected. Client submitted discount ₦${clientOrderDiscount.toLocaleString()} (total ₦${clientOrderTotalNaira.toLocaleString()}), but server calculated discount ₦${serverDiscountAmount.toLocaleString()}, delivery fee ₦${serverDeliveryFee.toLocaleString()} for "${deliveryMethod}" (true expected total ₦${serverExpectedTotalNaira.toLocaleString()}).`,
         extra: {
           serverExpectedNaira: serverExpectedTotalNaira,
           serverDiscountAmount,
+          serverDeliveryFee,
+          deliveryMethod,
         },
       };
     }
@@ -428,6 +441,7 @@ async function startServer() {
       serverDiscountAmount,
       serverDeliveryFee,
       serverExpectedTotalNaira,
+      deliveryMethod,
     };
   }
 
@@ -1193,14 +1207,19 @@ async function startServer() {
 
       if (resendKey && resendKey.length > 0) {
         try {
-          const resendResponse = await fetch('https://api.resend.com/emails', {
+          const primaryFrom =
+            data.from ||
+            process.env.RESEND_FROM_EMAIL ||
+            'Jazelle Skin Haven <orders@jazelleskinhaven.com>';
+
+          let resendResponse = await fetch('https://api.resend.com/emails', {
             method: 'POST',
             headers: {
               Authorization: `Bearer ${resendKey}`,
               'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-              from: data.from || 'Jazelle Skin Haven <orders@jazelleskinhaven.com>',
+              from: primaryFrom,
               to: data.to,
               subject: data.subject,
               html: data.html,
@@ -1208,7 +1227,34 @@ async function startServer() {
             }),
           });
 
-          const resendData = await resendResponse.json();
+          let resendData = await resendResponse.json();
+
+          // If custom domain is not yet verified in Resend, retry with Resend's verified onboarding sender
+          if (
+            !resendResponse.ok &&
+            String(resendData?.message || '').toLowerCase().includes('domain is not verified')
+          ) {
+            const retryResponse = await fetch('https://api.resend.com/emails', {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${resendKey}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                from: 'Jazelle Skin Haven <onboarding@resend.dev>',
+                to: data.to,
+                subject: data.subject,
+                html: data.html,
+                text: data.text,
+              }),
+            });
+            const retryData = await retryResponse.json();
+            if (retryResponse.ok) {
+              resendResponse = retryResponse;
+              resendData = retryData;
+            }
+          }
+
           if (!resendResponse.ok) {
             console.warn('[Resend API Warning]', resendData);
             return res.status(200).json({
@@ -1327,7 +1373,7 @@ async function startServer() {
               Questions about payment methods or shipping to your location?
             </p>
             <p style="margin: 8px 0 0 0; font-size: 13px;">
-              <a href="https://wa.me/2348012345678?text=${encodeURIComponent(`Hi Jazelle! I have a question regarding my pending order ${order.order_number}`)}" style="color: #25D366; font-weight: 700; text-decoration: none;">
+              <a href="https://wa.me/2347017186752?text=${encodeURIComponent(`Hi Jazelle! I have a question regarding my pending order ${order.order_number}`)}" style="color: #25D366; font-weight: 700; text-decoration: none;">
                 Chat with us on WhatsApp &rarr;
               </a>
             </p>
@@ -1337,7 +1383,7 @@ async function startServer() {
           <p style="margin: 0 0 10px 0;">Jazelle Skin Haven &bull; Delivered with love across Nigeria</p>
           <div>
             <a href="https://instagram.com/jazelle.skin.haven">Instagram</a> &bull;
-            <a href="https://wa.me/2348012345678">WhatsApp Us</a> &bull;
+            <a href="https://wa.me/2347017186752">WhatsApp Us</a> &bull;
             <a href="mailto:hello@jazelleskinhaven.com">hello@jazelleskinhaven.com</a>
           </div>
         </div>

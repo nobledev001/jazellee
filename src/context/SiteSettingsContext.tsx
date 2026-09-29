@@ -44,6 +44,10 @@ export interface SiteSettings {
   tiktok_handle: string;
   store_location: string;
   free_delivery_threshold: string;
+  standard_delivery_fee: string;
+  delivery_fee_motor_park: string;
+  delivery_fee_jumia: string;
+  delivery_fee_fez: string;
   [key: string]: string;
 }
 
@@ -91,6 +95,10 @@ export const DEFAULT_SITE_SETTINGS: SiteSettings = {
   tiktok_handle: '@jazelleskinhaven',
   store_location: 'Abuja, Nigeria (Nationwide Delivery)',
   free_delivery_threshold: '35000',
+  standard_delivery_fee: '3500',
+  delivery_fee_motor_park: '2000',
+  delivery_fee_jumia: '3000',
+  delivery_fee_fez: '2500',
 };
 
 interface SiteSettingsContextValue {

@@ -8,8 +8,55 @@ const corsHeaders = {
 
 const DEFAULT_DELIVERY_FEE = 3500;
 const DEFAULT_FREE_DELIVERY_THRESHOLD = 35000;
+const DEFAULT_MOTOR_PARK_FEE = 2000;
+const DEFAULT_JUMIA_FEE = 3000;
+const DEFAULT_FEZ_FEE = 2500;
 const DEFAULT_TOKEN_LIFETIME_SECONDS = 3600;
 const TOKEN_EXPIRY_SAFETY_BUFFER_MS = 60 * 1000;
+
+function extractDeliveryMethodFromOrder(orderRow: Record<string, unknown>): string {
+  const normalize = (val: unknown): string | null => {
+    if (typeof val !== 'string') return null;
+    const clean = val.trim().toLowerCase();
+    if (clean === 'motor_park' || clean === 'motor-park' || clean === 'park') return 'motor_park';
+    if (clean === 'jumia') return 'jumia';
+    if (clean === 'fez') return 'fez';
+    if (clean === 'standard') return 'standard';
+    return null;
+  };
+
+  const direct = normalize(orderRow.delivery_method);
+  if (direct) return direct;
+
+  if (Array.isArray(orderRow.items) && orderRow.items.length > 0) {
+    const firstItem = orderRow.items[0] as Record<string, unknown> | null;
+    if (firstItem && typeof firstItem === 'object') {
+      const fromItem = normalize(firstItem.delivery_method);
+      if (fromItem) return fromItem;
+    }
+  }
+
+  if (typeof orderRow.delivery_landmark === 'string') {
+    const match = orderRow.delivery_landmark.match(/\[JSH_DELIVERY:(\{.*?\})\]/);
+    if (match && match[1]) {
+      try {
+        const parsed = JSON.parse(match[1]) as { m?: string };
+        const fromLandmark = normalize(parsed.m);
+        if (fromLandmark) return fromLandmark;
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  return 'standard';
+}
+
+function parseFeeSetting(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw === null || String(raw).trim() === '') return fallback;
+  const num = Number(raw);
+  return Number.isFinite(num) && num >= 0 ? Math.round(num) : fallback;
+}
 
 // In-memory fallback rate limiter if DB table is not yet migrated
 const fallbackRateMap = new Map<string, { count: number; resetAt: number }>();
@@ -388,21 +435,59 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    // Fetch free_delivery_threshold from site_settings
-    const { data: thresholdSetting } = await supabaseAdmin
+    // Fetch delivery fee settings from site_settings
+    const { data: settingsRows } = await supabaseAdmin
       .from('site_settings')
-      .select('value')
-      .eq('key', 'free_delivery_threshold')
-      .maybeSingle();
+      .select('key, value')
+      .in('key', [
+        'free_delivery_threshold',
+        'standard_delivery_fee',
+        'delivery_fee_motor_park',
+        'delivery_fee_jumia',
+        'delivery_fee_fez',
+      ]);
 
-    const parsedThreshold = thresholdSetting?.value ? Number(thresholdSetting.value) : NaN;
-    const freeDeliveryThreshold =
-      Number.isFinite(parsedThreshold) && parsedThreshold >= 0
-        ? parsedThreshold
-        : DEFAULT_FREE_DELIVERY_THRESHOLD;
+    const settingsMap: Record<string, string> = {};
+    if (Array.isArray(settingsRows)) {
+      for (const r of settingsRows) {
+        if (r && typeof r.key === 'string') {
+          settingsMap[r.key] = String(r.value ?? '');
+        }
+      }
+    }
 
-    const serverDeliveryFee =
-      serverSubtotal === 0 || serverSubtotal >= freeDeliveryThreshold ? 0 : DEFAULT_DELIVERY_FEE;
+    const freeDeliveryThreshold = parseFeeSetting(
+      settingsMap.free_delivery_threshold,
+      DEFAULT_FREE_DELIVERY_THRESHOLD
+    );
+    const standardDeliveryFee = parseFeeSetting(
+      settingsMap.standard_delivery_fee,
+      DEFAULT_DELIVERY_FEE
+    );
+    const motorParkFee = parseFeeSetting(
+      settingsMap.delivery_fee_motor_park,
+      DEFAULT_MOTOR_PARK_FEE
+    );
+    const jumiaFee = parseFeeSetting(settingsMap.delivery_fee_jumia, DEFAULT_JUMIA_FEE);
+    const fezFee = parseFeeSetting(settingsMap.delivery_fee_fez, DEFAULT_FEZ_FEE);
+
+    const deliveryMethod = extractDeliveryMethodFromOrder(
+      orderRow as unknown as Record<string, unknown>
+    );
+
+    let serverDeliveryFee = 0;
+    if (serverSubtotal > 0) {
+      if (deliveryMethod === 'motor_park') {
+        serverDeliveryFee = motorParkFee;
+      } else if (deliveryMethod === 'jumia') {
+        serverDeliveryFee = jumiaFee;
+      } else if (deliveryMethod === 'fez') {
+        serverDeliveryFee = fezFee;
+      } else {
+        serverDeliveryFee =
+          serverSubtotal >= freeDeliveryThreshold ? 0 : standardDeliveryFee;
+      }
+    }
 
     const serverExpectedTotalNaira = Math.max(0, serverSubtotal - serverDiscountAmount) + serverDeliveryFee;
 

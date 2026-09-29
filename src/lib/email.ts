@@ -1,5 +1,13 @@
 import { supabase } from './supabaseClient';
 import { formatNaira } from './format';
+import {
+  FEZ_TRACKING_URL,
+  JUMIA_TRACKING_URL,
+  getDeliveryMethodLabel,
+  normalizeDeliveryMethodId,
+  type DeliveryMethodDetails,
+  type DeliveryMethodId,
+} from './delivery';
 
 export interface EmailRecipient {
   email: string;
@@ -12,7 +20,13 @@ export interface SendEmailPayload {
   html: string;
   text?: string;
   from?: string;
-  type?: 'order_confirmation' | 'shipping_update' | 'password_reset' | 'otp_verification' | 'abandoned_cart_reminder';
+  type?:
+    | 'order_confirmation'
+    | 'shipping_update'
+    | 'tracking_update'
+    | 'password_reset'
+    | 'otp_verification'
+    | 'abandoned_cart_reminder';
   metadata?: Record<string, unknown>;
 }
 
@@ -37,36 +51,27 @@ export async function sendTransactionalEmail(payload: SendEmailPayload): Promise
   let result: SendEmailResult = { success: false };
 
   try {
-    // 1. Only attempt internal backend API endpoint if on localhost / server environment
-    const isLocalServer = typeof window !== 'undefined' &&
-      (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+    const response = await fetch('/api/send-email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from: fromAddress,
+        to: toAddresses,
+        subject: payload.subject,
+        html: payload.html,
+        text: payload.text,
+      }),
+    });
 
-    if (isLocalServer) {
-      const response = await fetch('/api/send-email', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          from: fromAddress,
-          to: toAddresses,
-          subject: payload.subject,
-          html: payload.html,
-          text: payload.text,
-        }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        result = {
-          success: true,
-          messageId: data.id || `msg_${Date.now()}`,
-          simulated: Boolean(data.simulated),
-        };
-      } else {
-        result = { success: true, simulated: true, messageId: `local_${Date.now()}` };
-      }
+    if (response.ok) {
+      const data = await response.json();
+      result = {
+        success: true,
+        messageId: data.id || `msg_${Date.now()}`,
+        simulated: Boolean(data.simulated),
+      };
     } else {
-      // On static hosting (Vercel), log to Supabase directly
-      result = { success: true, simulated: true, messageId: `client_${Date.now()}` };
+      result = { success: true, simulated: true, messageId: `local_${Date.now()}` };
     }
   } catch (err) {
     console.warn('[Email] Backend email dispatch fallback:', err);
@@ -179,6 +184,8 @@ export interface OrderEmailData {
   delivery_address: string;
   delivery_state: string;
   delivery_lga?: string;
+  delivery_method?: DeliveryMethodId | string;
+  delivery_method_details?: DeliveryMethodDetails | null;
   items: OrderEmailItem[];
   subtotal: number;
   delivery_fee: number;
@@ -190,6 +197,11 @@ export interface OrderEmailData {
  * Generates and sends an order confirmation email
  */
 export async function sendOrderConfirmationEmail(order: OrderEmailData) {
+  const methodId = normalizeDeliveryMethodId(order.delivery_method);
+  const methodLabel = getDeliveryMethodLabel(methodId);
+  const parkName = order.delivery_method_details?.park_name;
+  const parkLocation = order.delivery_method_details?.park_location;
+
   const itemsHtml = order.items
     .map(
       (item) => `
@@ -206,12 +218,25 @@ export async function sendOrderConfirmationEmail(order: OrderEmailData) {
     )
     .join('');
 
+  const deliveryExtraHtml =
+    methodId === 'motor_park' && (parkName || parkLocation)
+      ? `<div style="margin-top: 8px; padding-top: 8px; border-top: 1px dashed #F5BCD5; font-size: 13px; color: #760536;">
+           <strong>Park / Bus Company:</strong> ${parkName || 'N/A'}<br/>
+           <strong>Destination City / Park Location:</strong> ${parkLocation || 'N/A'}
+         </div>`
+      : '';
+
+  const origin =
+    typeof window !== 'undefined' && window.location.origin
+      ? window.location.origin
+      : 'https://jazelleskinhaven.com';
+
   const html = `
     ${emailHeader()}
       <span class="badge badge-green">Order Confirmed</span>
       <h2 class="title" style="margin-top: 12px;">Your self-care treat is confirmed, ${order.customer_name}!</h2>
       <p class="lead">
-        Thank you for trusting Jazelle Skin Haven. We have received your order <strong>#${order.order_number}</strong> and are carefully getting your glow essentials ready for dispatch.
+        Thank you for trusting Jazelle Skin Haven. We have received your order <strong>#${order.order_number}</strong> and are carefully getting your glow essentials ready for dispatch via <strong>${methodLabel}</strong>.
       </p>
 
       <div class="box">
@@ -224,7 +249,7 @@ export async function sendOrderConfirmationEmail(order: OrderEmailData) {
             <div style="display: table-cell; text-align: right;">${formatNaira(order.subtotal)}</div>
           </div>
           <div style="display: table; width: 100%; margin-bottom: 6px;">
-            <div style="display: table-cell;">Delivery Fee</div>
+            <div style="display: table-cell;">Delivery (${methodLabel})</div>
             <div style="display: table-cell; text-align: right;">${order.delivery_fee === 0 ? 'FREE' : formatNaira(order.delivery_fee)}</div>
           </div>
           <div style="display: table; width: 100%; padding-top: 6px; border-top: 1px solid #F5BCD5; font-size: 16px; font-weight: 700; color: #A20B4C;">
@@ -235,16 +260,17 @@ export async function sendOrderConfirmationEmail(order: OrderEmailData) {
       </div>
 
       <div class="box" style="margin-top: 16px;">
-        <h3 style="margin: 0 0 8px 0; font-size: 14px; color: #760536;">Delivery Address</h3>
+        <h3 style="margin: 0 0 8px 0; font-size: 14px; color: #760536;">Delivery Method &amp; Destination (${methodLabel})</h3>
         <p style="margin: 0; font-size: 13px; color: #A20B4C; line-height: 1.5;">
           ${order.delivery_address}<br/>
           ${order.delivery_lga ? `${order.delivery_lga}, ` : ''}${order.delivery_state}, Nigeria<br/>
           ${order.customer_phone ? `Phone: ${order.customer_phone}` : ''}
         </p>
+        ${deliveryExtraHtml}
       </div>
 
       <div style="text-align: center;">
-        <a href="https://jazelleskinhaven.com/track-order?id=${encodeURIComponent(order.order_number)}" class="btn">
+        <a href="${origin}/track-order?id=${encodeURIComponent(order.order_number)}" class="btn">
           Track Your Order &rarr;
         </a>
       </div>
@@ -256,7 +282,172 @@ export async function sendOrderConfirmationEmail(order: OrderEmailData) {
     subject: `Your Jazelle Skin Haven order is confirmed! (${order.order_number})`,
     html,
     type: 'order_confirmation',
-    metadata: { order_number: order.order_number, total: order.total },
+    metadata: {
+      order_number: order.order_number,
+      total: order.total,
+      delivery_method: methodId,
+    },
+  });
+}
+
+export interface OrderTrackingEmailData {
+  order_number: string;
+  customer_name: string;
+  customer_email: string;
+  delivery_method: DeliveryMethodId | string;
+  delivery_method_details?: DeliveryMethodDetails | null;
+  tracking_number: string;
+  items: OrderEmailItem[];
+  total?: number;
+}
+
+/**
+ * Automatically sends a tracking / waybill notification email via Resend
+ * when admin adds or updates the tracking number on an order.
+ */
+export async function sendOrderTrackingEmail(order: OrderTrackingEmailData) {
+  const methodId = normalizeDeliveryMethodId(order.delivery_method);
+  const methodLabel = getDeliveryMethodLabel(methodId);
+  const trackingNumber = order.tracking_number.trim();
+  const parkName = order.delivery_method_details?.park_name || 'your selected bus company';
+  const parkLocation = order.delivery_method_details?.park_location || 'your destination motor park';
+
+  const origin =
+    typeof window !== 'undefined' && window.location.origin
+      ? window.location.origin
+      : 'https://jazelleskinhaven.com';
+  const siteTrackOrderUrl = `${origin}/track-order?id=${encodeURIComponent(order.order_number)}`;
+
+  const itemsHtml = (order.items || [])
+    .map(
+      (item) => `
+      <div style="padding: 8px 0; border-bottom: 1px dashed #F5BCD5; display: table; width: 100%;">
+        <div style="display: table-cell; vertical-align: middle; width: 70%;">
+          <strong style="color: #760536; font-size: 13px;">${item.name}</strong>
+          <span style="color: #A20B4C; font-size: 12px; margin-left: 6px;">&times; ${item.quantity}</span>
+        </div>
+        <div style="display: table-cell; vertical-align: middle; text-align: right; font-weight: 600; color: #760536; font-size: 13px;">
+          ${formatNaira((item.price || 0) * (item.quantity || 1))}
+        </div>
+      </div>
+    `
+    )
+    .join('');
+
+  let methodTrackingInstructionsHtml = '';
+  let plainTextInstructions = '';
+
+  if (methodId === 'jumia') {
+    methodTrackingInstructionsHtml = `
+      <div class="box" style="background: #FFF9FB; border: 1.5px solid #F25A9B;">
+        <h3 style="margin: 0 0 8px 0; font-size: 15px; color: #760536;">How to Track via Jumia Delivery</h3>
+        <p style="margin: 0 0 14px 0; font-size: 13px; color: #A20B4C; line-height: 1.6;">
+          Click the button below to open Jumia's tracking page, then enter your tracking number <strong>${trackingNumber}</strong> to view live delivery updates:
+        </p>
+        <div style="margin: 12px 0;">
+          <a href="${JUMIA_TRACKING_URL}" style="display: inline-block; background-color: #760536; color: #ffffff !important; text-decoration: none; padding: 12px 24px; border-radius: 9999px; font-weight: 600; font-size: 13px;">
+            Track on Jumia Delivery (${JUMIA_TRACKING_URL}) &rarr;
+          </a>
+        </div>
+      </div>
+    `;
+    plainTextInstructions = `Track on Jumia Delivery: Visit ${JUMIA_TRACKING_URL} and enter your tracking number: ${trackingNumber}`;
+  } else if (methodId === 'fez') {
+    methodTrackingInstructionsHtml = `
+      <div class="box" style="background: #FFF9FB; border: 1.5px solid #F25A9B;">
+        <h3 style="margin: 0 0 8px 0; font-size: 15px; color: #760536;">How to Track via Fez Delivery</h3>
+        <p style="margin: 0 0 14px 0; font-size: 13px; color: #A20B4C; line-height: 1.6;">
+          Click the button below to open Fez Delivery's tracking page, then enter your tracking number <strong>${trackingNumber}</strong> to follow your shipment in real time:
+        </p>
+        <div style="margin: 12px 0;">
+          <a href="${FEZ_TRACKING_URL}" style="display: inline-block; background-color: #760536; color: #ffffff !important; text-decoration: none; padding: 12px 24px; border-radius: 9999px; font-weight: 600; font-size: 13px;">
+            Track on Fez Delivery (${FEZ_TRACKING_URL}) &rarr;
+          </a>
+        </div>
+      </div>
+    `;
+    plainTextInstructions = `Track on Fez Delivery: Visit ${FEZ_TRACKING_URL} and enter your tracking number: ${trackingNumber}`;
+  } else if (methodId === 'motor_park') {
+    methodTrackingInstructionsHtml = `
+      <div class="box" style="background: #FFF9FB; border: 1.5px solid #F25A9B;">
+        <h3 style="margin: 0 0 8px 0; font-size: 15px; color: #760536;">Motor Park / Bus Pickup Instructions</h3>
+        <p style="margin: 0 0 10px 0; font-size: 13px; color: #A20B4C; line-height: 1.6;">
+          Since Motor Park / Bus Pickup uses direct interstate bus dispatch rather than online courier tracking, please use the pickup details below to collect your package when the driver or park desk calls you:
+        </p>
+        <div style="background: #ffffff; border-radius: 12px; padding: 14px; border: 1px solid #F8DDE9; font-size: 13px; color: #760536; line-height: 1.7;">
+          <div><strong>Bus / Park Company Name:</strong> ${parkName}</div>
+          <div><strong>Destination City / Park Location:</strong> ${parkLocation}</div>
+          <div><strong>Waybill / Driver Info:</strong> ${trackingNumber}</div>
+        </div>
+      </div>
+    `;
+    plainTextInstructions = `Motor Park Pickup Instructions: Pick up at ${parkLocation} via ${parkName}. Waybill / Reference: ${trackingNumber}.`;
+  } else {
+    methodTrackingInstructionsHtml = `
+      <div class="box" style="background: #FFF9FB; border: 1.5px solid #F25A9B;">
+        <h3 style="margin: 0 0 8px 0; font-size: 15px; color: #760536;">Delivery Reference</h3>
+        <p style="margin: 0; font-size: 13px; color: #A20B4C; line-height: 1.6;">
+          Your dispatch reference is <strong>${trackingNumber}</strong>. Our courier will contact you by phone upon arrival.
+        </p>
+      </div>
+    `;
+    plainTextInstructions = `Dispatch Reference: ${trackingNumber}`;
+  }
+
+  const html = `
+    ${emailHeader()}
+      <span class="badge badge-green">Tracking Information Added</span>
+      <h2 class="title" style="margin-top: 12px;">Your order is on its way via ${methodLabel}!</h2>
+      <p class="lead">
+        Hi ${order.customer_name}, great news! Your Jazelle Skin Haven order <strong>#${order.order_number}</strong> has been handed over for delivery via <strong>${methodLabel}</strong>.
+      </p>
+
+      <div class="box" style="text-align: center; padding: 22px 18px;">
+        <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: #F13184; font-weight: 700; margin-bottom: 6px;">
+          Tracking Number / Waybill
+        </div>
+        <div style="font-size: 22px; font-weight: 800; letter-spacing: 1.5px; color: #760536; font-family: monospace; background: #ffffff; display: inline-block; padding: 10px 22px; border-radius: 12px; border: 2px dashed #F25A9B;">
+          ${trackingNumber}
+        </div>
+      </div>
+
+      ${methodTrackingInstructionsHtml}
+
+      <div class="box">
+        <h3 style="margin: 0 0 10px 0; font-size: 14px; color: #760536;">Order #${order.order_number} &mdash; Items Summary</h3>
+        ${itemsHtml}
+        ${
+          typeof order.total === 'number'
+            ? `<div style="padding-top: 10px; margin-top: 6px; display: table; width: 100%; font-weight: 700; color: #A20B4C; font-size: 14px;">
+                 <div style="display: table-cell;">Order Total</div>
+                 <div style="display: table-cell; text-align: right;">${formatNaira(order.total)}</div>
+               </div>`
+            : ''
+        }
+      </div>
+
+      <div style="text-align: center; margin-top: 24px;">
+        <a href="${siteTrackOrderUrl}" class="btn">
+          Track Order on Jazelle Skin Haven &rarr;
+        </a>
+        <p style="font-size: 12px; color: #A20B4C; margin-top: 8px;">
+          You can also check your order status anytime at <a href="${siteTrackOrderUrl}" style="color: #F13184; font-weight: 600;">${siteTrackOrderUrl}</a>
+        </p>
+      </div>
+    ${emailFooter()}
+  `;
+
+  return sendTransactionalEmail({
+    to: order.customer_email,
+    subject: `Your order #${order.order_number} is on its way via ${methodLabel}! (Tracking: ${trackingNumber})`,
+    html,
+    text: `Hi ${order.customer_name}, your Jazelle Skin Haven order #${order.order_number} is on its way via ${methodLabel}. Tracking Number / Waybill: ${trackingNumber}. ${plainTextInstructions} View your order status anytime at: ${siteTrackOrderUrl}`,
+    type: 'tracking_update',
+    metadata: {
+      order_number: order.order_number,
+      delivery_method: methodId,
+      tracking_number: trackingNumber,
+    },
   });
 }
 

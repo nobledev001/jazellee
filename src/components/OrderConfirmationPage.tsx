@@ -6,6 +6,7 @@ import { supabase } from '@/lib/auth';
 import { verifyMonnifyTransactionOnServer } from '@/lib/monnify';
 import { useStore } from '@/store/StoreContext';
 import { sendOrderConfirmationEmail } from '@/lib/email';
+import { extractOrderDeliveryInfo } from '@/lib/delivery';
 
 interface OrderItem {
   slug: string;
@@ -13,6 +14,9 @@ interface OrderItem {
   price: number;
   quantity: number;
   image: string;
+  delivery_method?: string;
+  delivery_method_details?: { park_name?: string; park_location?: string };
+  tracking_number?: string;
 }
 
 interface Order {
@@ -26,6 +30,9 @@ interface Order {
   status: string;
   payment_status?: string;
   payment_method?: string;
+  delivery_method?: string;
+  delivery_method_details?: { park_name?: string; park_location?: string } | null;
+  tracking_number?: string;
   customer_name: string;
   customer_email: string;
   customer_phone?: string;
@@ -128,6 +135,10 @@ export default function OrderConfirmationPage() {
             clearCart();
             window.dispatchEvent(new CustomEvent('jazelle_orders_updated'));
 
+            const deliveryInfo = extractOrderDeliveryInfo(
+              fetchedOrder as unknown as Record<string, unknown>
+            );
+
             void sendOrderConfirmationEmail({
               order_number: fetchedOrder.order_number,
               customer_name: fetchedOrder.customer_name,
@@ -136,6 +147,8 @@ export default function OrderConfirmationPage() {
               delivery_address: fetchedOrder.delivery_address,
               delivery_state: fetchedOrder.delivery_state,
               delivery_lga: fetchedOrder.delivery_lga,
+              delivery_method: deliveryInfo.deliveryMethod,
+              delivery_method_details: deliveryInfo.deliveryDetails,
               items: (fetchedOrder.items || []).map((it) => ({
                 name: it.name,
                 quantity: it.quantity,
@@ -190,6 +203,8 @@ export default function OrderConfirmationPage() {
     );
   }
 
+  const deliveryInfo = extractOrderDeliveryInfo(order as unknown as Record<string, unknown>);
+
   return (
     <main className="container-jazelle py-10 sm:py-16">
       <div className="mx-auto max-w-2xl">
@@ -236,7 +251,7 @@ export default function OrderConfirmationPage() {
               </div>
             ) : null}
             <div className="flex justify-between text-berry-500">
-              <span>Delivery</span>
+              <span>Delivery ({deliveryInfo.deliveryMethodLabel})</span>
               <span className="font-medium text-berry-700">
                 {order.delivery_fee === 0 ? 'Free' : formatNaira(order.delivery_fee)}
               </span>
@@ -249,9 +264,25 @@ export default function OrderConfirmationPage() {
         </div>
 
         <div className="mt-4 rounded-4xl bg-white p-6 shadow-soft sm:p-8">
-          <h2 className="font-display text-lg font-medium text-berry-800">Delivery to</h2>
-          <div className="mt-3 space-y-1 text-sm text-berry-500">
-            <p className="font-medium text-berry-700">{order.customer_name}</p>
+          <h2 className="font-display text-lg font-medium text-berry-800">Delivery method &amp; destination</h2>
+          <div className="mt-3 space-y-1.5 text-sm text-berry-500">
+            <p className="inline-flex items-center gap-1.5 rounded-full bg-blush-50 px-3 py-1 text-xs font-semibold text-blush-700">
+              <Truck className="h-3.5 w-3.5" />
+              <span>{deliveryInfo.fulfillmentSummary}</span>
+            </p>
+            <p className="font-medium text-berry-700 pt-1">{order.customer_name}</p>
+            {deliveryInfo.deliveryMethod === 'motor_park' &&
+              (deliveryInfo.deliveryDetails.park_name || deliveryInfo.deliveryDetails.park_location) && (
+                <div className="rounded-2xl bg-blush-50/70 p-3 text-xs text-berry-700 border border-blush-100 space-y-1">
+                  <p>
+                    <strong>Park / Bus Company:</strong> {deliveryInfo.deliveryDetails.park_name || 'N/A'}
+                  </p>
+                  <p>
+                    <strong>Destination City / Park Location:</strong>{' '}
+                    {deliveryInfo.deliveryDetails.park_location || 'N/A'}
+                  </p>
+                </div>
+              )}
             <p>{order.delivery_address}</p>
             <p>{order.delivery_lga}, {order.delivery_state}</p>
             <p>Nigeria</p>

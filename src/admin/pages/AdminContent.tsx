@@ -15,6 +15,7 @@ import {
   Timer,
   User,
   Phone,
+  Truck,
   ExternalLink,
 } from 'lucide-react';
 import { supabase, type DbJournalArticle, type DbFaqSection, type DbFaqItem } from '../supabase';
@@ -26,7 +27,7 @@ import { DEFAULT_SITE_SETTINGS } from '@/hooks/useSiteSettings';
 export default function AdminContent() {
   const [activeTab, setActiveTab] = useState<'content' | 'journal' | 'faq'>('content');
   const [contentSubTab, setContentSubTab] = useState<
-    'hero' | 'countdown' | 'about' | 'homepage' | 'store_info'
+    'hero' | 'countdown' | 'about' | 'homepage' | 'store_info' | 'delivery'
   >('hero');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -377,6 +378,18 @@ export default function AdminContent() {
             >
               <Phone className="h-3.5 w-3.5 text-emerald-500" />
               <span>Announcements &amp; Contact</span>
+            </button>
+
+            <button
+              onClick={() => setContentSubTab('delivery')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
+                contentSubTab === 'delivery'
+                  ? 'bg-white text-gray-900 shadow-xs font-semibold'
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              <Truck className="h-3.5 w-3.5 text-pink-600" />
+              <span>Delivery Settings</span>
             </button>
           </div>
 
@@ -973,6 +986,150 @@ export default function AdminContent() {
                         placeholder="Wuse II, Abuja, Nigeria"
                         className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:border-pink-500"
                       />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* SUBSECTION 6: DELIVERY SETTINGS */}
+              {contentSubTab === 'delivery' && (
+                <div className="space-y-5">
+                  <div className="border-b border-gray-100 pb-3">
+                    <h2 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+                      <Truck className="h-4 w-4 text-pink-600" />
+                      <span>Delivery Methods &amp; Pricing</span>
+                    </h2>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      Set the checkout delivery fees for Motor Park / Bus Pickup, Jumia Delivery, Fez Delivery, and Standard Doorstep Delivery. The selected delivery method&apos;s price replaces the standard delivery fee in the order total and is verified server-side.
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div className="rounded-xl border border-gray-200 p-4 bg-gray-50/50 space-y-2">
+                      <label className="block text-xs font-bold text-gray-900">
+                        Motor Park / Bus Pickup Fee (₦)
+                      </label>
+                      <p className="text-[11px] text-gray-500">
+                        Interstate bus / motor park waybill pickup price.
+                      </p>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-semibold">
+                          ₦
+                        </span>
+                        <input
+                          type="number"
+                          min="0"
+                          step="100"
+                          value={settings.delivery_fee_motor_park ?? '2000'}
+                          onChange={(e) =>
+                            handleSettingChange('delivery_fee_motor_park', e.target.value)
+                          }
+                          placeholder="2000"
+                          className="w-full rounded-lg border border-gray-200 bg-white pl-8 pr-3 py-2 text-sm font-semibold text-gray-900 focus:outline-none focus:border-pink-500"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-gray-200 p-4 bg-gray-50/50 space-y-2">
+                      <label className="block text-xs font-bold text-gray-900">
+                        Jumia Delivery Fee (₦)
+                      </label>
+                      <p className="text-[11px] text-gray-500">
+                        Nationwide delivery via Jumia Logistics.
+                      </p>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-semibold">
+                          ₦
+                        </span>
+                        <input
+                          type="number"
+                          min="0"
+                          step="100"
+                          value={settings.delivery_fee_jumia ?? '3000'}
+                          onChange={(e) =>
+                            handleSettingChange('delivery_fee_jumia', e.target.value)
+                          }
+                          placeholder="3000"
+                          className="w-full rounded-lg border border-gray-200 bg-white pl-8 pr-3 py-2 text-sm font-semibold text-gray-900 focus:outline-none focus:border-pink-500"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-gray-200 p-4 bg-gray-50/50 space-y-2">
+                      <label className="block text-xs font-bold text-gray-900">
+                        Fez Delivery Fee (₦)
+                      </label>
+                      <p className="text-[11px] text-gray-500">
+                        Fast nationwide doorstep delivery via Fez Delivery.
+                      </p>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-semibold">
+                          ₦
+                        </span>
+                        <input
+                          type="number"
+                          min="0"
+                          step="100"
+                          value={settings.delivery_fee_fez ?? '2500'}
+                          onChange={(e) =>
+                            handleSettingChange('delivery_fee_fez', e.target.value)
+                          }
+                          placeholder="2500"
+                          className="w-full rounded-lg border border-gray-200 bg-white pl-8 pr-3 py-2 text-sm font-semibold text-gray-900 focus:outline-none focus:border-pink-500"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-3 border-t border-gray-100">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 mb-1">
+                        Standard Doorstep Delivery Fee (₦)
+                      </label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-semibold">
+                          ₦
+                        </span>
+                        <input
+                          type="number"
+                          min="0"
+                          step="100"
+                          value={settings.standard_delivery_fee ?? '3500'}
+                          onChange={(e) =>
+                            handleSettingChange('standard_delivery_fee', e.target.value)
+                          }
+                          placeholder="3500"
+                          className="w-full rounded-lg border border-gray-200 pl-8 pr-3 py-2 text-sm focus:outline-none focus:border-pink-500"
+                        />
+                      </div>
+                      <p className="text-[11px] text-gray-400 mt-1">
+                        Default fee for Standard Doorstep Delivery when order subtotal is below the free delivery threshold.
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 mb-1">
+                        Free Standard Delivery Threshold (₦)
+                      </label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-semibold">
+                          ₦
+                        </span>
+                        <input
+                          type="number"
+                          min="0"
+                          step="1000"
+                          value={settings.free_delivery_threshold ?? '35000'}
+                          onChange={(e) =>
+                            handleSettingChange('free_delivery_threshold', e.target.value)
+                          }
+                          placeholder="35000"
+                          className="w-full rounded-lg border border-gray-200 pl-8 pr-3 py-2 text-sm focus:outline-none focus:border-pink-500"
+                        />
+                      </div>
+                      <p className="text-[11px] text-gray-400 mt-1">
+                        Orders using Standard Doorstep Delivery at or above this amount qualify for free delivery.
+                      </p>
                     </div>
                   </div>
                 </div>

@@ -39,7 +39,16 @@ export interface DbOrder {
   id: string;
   user_id: string;
   order_number: string;
-  items: Array<{ slug: string; name: string; price: number; quantity: number; image: string }>;
+  items: Array<{
+    slug: string;
+    name: string;
+    price: number;
+    quantity: number;
+    image: string;
+    delivery_method?: string;
+    delivery_method_details?: { park_name?: string; park_location?: string };
+    tracking_number?: string;
+  }>;
   subtotal: number;
   delivery_fee: number;
   discount_amount: number;
@@ -47,6 +56,9 @@ export interface DbOrder {
   status: string;
   payment_status?: string;
   payment_reference?: string;
+  delivery_method?: string;
+  delivery_method_details?: { park_name?: string; park_location?: string } | null;
+  tracking_number?: string;
   customer_name: string;
   customer_email: string;
   customer_phone: string;

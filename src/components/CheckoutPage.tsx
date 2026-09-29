@@ -1,10 +1,16 @@
 import { useEffect, useState, useRef } from 'react';
-import { ArrowRight, CreditCard, Building2, Smartphone, Check, Lock, ChevronDown, AlertCircle, Ticket, X, CheckCircle2 } from 'lucide-react';
+import { ArrowRight, CreditCard, Building2, Smartphone, Check, Lock, ChevronDown, AlertCircle, Ticket, X, CheckCircle2, Truck, Bus, PackageCheck } from 'lucide-react';
 import { useStore, getCartProducts } from '@/store/StoreContext';
 import { formatNaira } from '@/lib/format';
 import { useRouter } from '@/router';
 import { useAuth, supabase, recordCustomerProfile } from '@/lib/auth';
 import { sendOrderConfirmationEmail } from '@/lib/email';
+import {
+  extractOrderDeliveryInfo,
+  getDeliveryMethodLabel,
+  type DeliveryMethodDetails,
+  type DeliveryMethodId,
+} from '@/lib/delivery';
 import {
   getMonnifyConfig,
   initializeMonnifyTransactionOnServer,
@@ -32,6 +38,9 @@ export default function CheckoutPage() {
   const {
     cart,
     cartSubtotal,
+    selectedDeliveryMethod,
+    setSelectedDeliveryMethod,
+    deliveryMethods,
     deliveryFee,
     appliedCoupon,
     discountAmount,
@@ -71,6 +80,8 @@ export default function CheckoutPage() {
     state: '',
     lga: '',
     landmark: '',
+    parkBusCompany: '',
+    parkLocation: '',
     paymentMethod: 'card' as PaymentMethod,
   });
 
@@ -117,8 +128,10 @@ export default function CheckoutPage() {
             const ord = rawData as Record<string, unknown>;
             if (ord.status === 'pending' || (ord.status !== 'placed' && ord.payment_status !== 'paid')) {
               const code = String(ord.order_number || resumeCode);
+              const extractedDelivery = extractOrderDeliveryInfo(ord);
               setResumedOrderNumber(code);
               setCheckoutReference(code);
+              setSelectedDeliveryMethod(extractedDelivery.deliveryMethod);
               setForm((prev) => ({
                 ...prev,
                 fullName: String(ord.customer_name || prev.fullName),
@@ -128,6 +141,8 @@ export default function CheckoutPage() {
                 state: String(ord.delivery_state || prev.state),
                 lga: String(ord.delivery_lga || prev.lga),
                 landmark: String(ord.delivery_landmark || prev.landmark),
+                parkBusCompany: String(extractedDelivery.deliveryDetails.park_name || prev.parkBusCompany),
+                parkLocation: String(extractedDelivery.deliveryDetails.park_location || prev.parkLocation),
                 paymentMethod: (ord.payment_method as PaymentMethod) || prev.paymentMethod,
               }));
 
@@ -152,7 +167,7 @@ export default function CheckoutPage() {
         }
       })();
     }
-  }, []);
+  }, [setSelectedDeliveryMethod]);
 
   // Pre-fill user data if authenticated, but allow guest checkout
   useEffect(() => {
@@ -203,22 +218,33 @@ export default function CheckoutPage() {
     if (!phoneClean) next.phone = 'Please enter your phone number';
     else if (!/^\+?[\d]{10,15}$/.test(phoneClean)) next.phone = 'Please enter a valid phone number (10 to 15 digits)';
 
-    const addressTrim = form.address.trim();
-    if (!addressTrim) next.address = 'Please enter your delivery address';
-    else if (addressTrim.length > 300) next.address = 'Address is too long (max 300 characters)';
+    if (selectedDeliveryMethod === 'motor_park') {
+      const parkCompanyTrim = form.parkBusCompany.trim();
+      const parkLocTrim = form.parkLocation.trim();
+      if (!parkCompanyTrim) {
+        next.parkBusCompany = 'Please enter the Park or Bus Company Name';
+      }
+      if (!parkLocTrim) {
+        next.parkLocation = 'Please enter the Destination City / Park Location';
+      }
+    } else {
+      const addressTrim = form.address.trim();
+      if (!addressTrim) next.address = 'Please enter your delivery address';
+      else if (addressTrim.length > 300) next.address = 'Address is too long (max 300 characters)';
+
+      const lgaTrim = form.lga.trim();
+      if (!lgaTrim) next.lga = 'Please enter your LGA or city area';
+      else if (lgaTrim.length > 100) next.lga = 'LGA/city must be under 100 characters';
+    }
 
     if (!form.state) next.state = 'Please select your state';
-
-    const lgaTrim = form.lga.trim();
-    if (!lgaTrim) next.lga = 'Please enter your LGA or city area';
-    else if (lgaTrim.length > 100) next.lga = 'LGA/city must be under 100 characters';
 
     setErrors(next);
     return Object.keys(next).length === 0;
   };
 
   /**
-   * Finalizes post-payment client actions after verify-paystack has verified the payment
+   * Finalizes post-payment client actions after verify-monnify has verified the payment
    * and finalized the order server-side (status -> placed, payment_status -> paid,
    * stock decremented, coupon used_count incremented).
    */
@@ -243,15 +269,33 @@ export default function CheckoutPage() {
         window.dispatchEvent(new CustomEvent('jazelle_orders_updated'));
       }
 
+      const effectiveAddress =
+        form.address.trim() ||
+        (selectedDeliveryMethod === 'motor_park'
+          ? `Motor Park Pickup: ${form.parkBusCompany.trim()} — ${form.parkLocation.trim()}`
+          : '');
+      const effectiveLga =
+        form.lga.trim() ||
+        (selectedDeliveryMethod === 'motor_park' ? form.parkLocation.trim() : '');
+      const methodDetails: DeliveryMethodDetails | null =
+        selectedDeliveryMethod === 'motor_park'
+          ? {
+              park_name: form.parkBusCompany.trim(),
+              park_location: form.parkLocation.trim(),
+            }
+          : null;
+
       // Trigger transactional order confirmation email via Resend
       await sendOrderConfirmationEmail({
         order_number: orderNumber,
         customer_name: form.fullName.trim(),
         customer_email: form.email.trim(),
         customer_phone: form.phone.trim(),
-        delivery_address: form.address.trim(),
+        delivery_address: effectiveAddress,
         delivery_state: form.state,
-        delivery_lga: form.lga.trim(),
+        delivery_lga: effectiveLga,
+        delivery_method: selectedDeliveryMethod,
+        delivery_method_details: methodDetails,
         items: items.map(({ product, quantity }) => ({
           name: product.name,
           quantity,
@@ -356,15 +400,41 @@ export default function CheckoutPage() {
       const { data: authData } = await supabase.auth.getSession();
       const currentUserId = authData?.session?.user?.id;
 
-      const buildPendingPayload = (ordNum: string): Record<string, unknown> => {
+      const effectiveAddress =
+        form.address.trim() ||
+        (selectedDeliveryMethod === 'motor_park'
+          ? `Motor Park Pickup: ${form.parkBusCompany.trim()} — ${form.parkLocation.trim()}`
+          : '');
+      const effectiveLga =
+        form.lga.trim() ||
+        (selectedDeliveryMethod === 'motor_park' ? form.parkLocation.trim() : '');
+      const methodDetails: DeliveryMethodDetails =
+        selectedDeliveryMethod === 'motor_park'
+          ? {
+              park_name: form.parkBusCompany.trim(),
+              park_location: form.parkLocation.trim(),
+            }
+          : {};
+
+      const buildPendingPayload = (
+        ordNum: string,
+        includeNewDeliveryCols = true
+      ): Record<string, unknown> => {
         const payload: Record<string, unknown> = {
           order_number: ordNum,
-          items: items.map(({ product, quantity }) => ({
+          items: items.map(({ product, quantity }, idx) => ({
             slug: product.slug,
             name: product.name,
             price: product.price,
             quantity,
             image: product.image,
+            ...(idx === 0
+              ? {
+                  delivery_method: selectedDeliveryMethod,
+                  delivery_method_details: methodDetails,
+                  tracking_number: '',
+                }
+              : {}),
           })),
           subtotal: cartSubtotal,
           delivery_fee: deliveryFee,
@@ -375,14 +445,25 @@ export default function CheckoutPage() {
           customer_name: form.fullName.trim(),
           customer_email: form.email.trim(),
           customer_phone: form.phone.trim(),
-          delivery_address: form.address.trim(),
+          delivery_address: effectiveAddress,
           delivery_state: form.state,
-          delivery_lga: form.lga.trim(),
-          delivery_landmark: form.landmark.trim(),
+          delivery_lga: effectiveLga,
+          delivery_landmark:
+            selectedDeliveryMethod === 'motor_park'
+              ? `Motor Park Pickup: ${form.parkBusCompany.trim()} (${form.parkLocation.trim()})${
+                  form.landmark.trim() ? ` • ${form.landmark.trim()}` : ''
+                }`
+              : form.landmark.trim(),
           payment_method: form.paymentMethod,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         };
+
+        if (includeNewDeliveryCols) {
+          payload.delivery_method = selectedDeliveryMethod;
+          payload.delivery_method_details = methodDetails;
+          payload.tracking_number = '';
+        }
 
         if (
           currentUserId &&
@@ -393,8 +474,24 @@ export default function CheckoutPage() {
         return payload;
       };
 
-      let pendingPayload = buildPendingPayload(orderNumber);
+      const isMissingDeliveryColumnError = (err: { code?: string; message?: string } | null) => {
+        if (!err) return false;
+        const msg = (err.message || '').toLowerCase();
+        return (
+          err.code === '42703' ||
+          err.code === 'PGRST204' ||
+          msg.includes('delivery_method') ||
+          msg.includes('tracking_number')
+        );
+      };
+
+      let pendingPayload = buildPendingPayload(orderNumber, true);
       let insertResult = await supabase.from('orders').insert(pendingPayload);
+
+      if (insertResult.error && isMissingDeliveryColumnError(insertResult.error)) {
+        pendingPayload = buildPendingPayload(orderNumber, false);
+        insertResult = await supabase.from('orders').insert(pendingPayload);
+      }
 
       if (insertResult.error) {
         // Guests do not have UPDATE permission on public.orders under RLS.
@@ -402,8 +499,12 @@ export default function CheckoutPage() {
         if (insertResult.error.code === '23505') {
           orderNumber = `JAZ-${Date.now().toString().slice(-8)}`;
           setCheckoutReference(orderNumber);
-          pendingPayload = buildPendingPayload(orderNumber);
+          pendingPayload = buildPendingPayload(orderNumber, true);
           insertResult = await supabase.from('orders').insert(pendingPayload);
+          if (insertResult.error && isMissingDeliveryColumnError(insertResult.error)) {
+            pendingPayload = buildPendingPayload(orderNumber, false);
+            insertResult = await supabase.from('orders').insert(pendingPayload);
+          }
         }
 
         if (insertResult.error) {
@@ -678,11 +779,114 @@ export default function CheckoutPage() {
             </div>
           </section>
 
-          {/* Delivery */}
+          {/* Delivery Method & Address */}
           <section className="rounded-4xl bg-white p-6 shadow-soft">
-            <h2 className="font-display text-lg font-medium text-berry-800">2. Delivery address</h2>
-            <div className="mt-4 space-y-4">
-              <Field label="Street address" error={errors.address}>
+            <h2 className="font-display text-lg font-medium text-berry-800">2. Delivery method &amp; destination</h2>
+            <p className="mt-1 text-xs text-berry-400">
+              Choose how you would like your self-care order delivered across Nigeria.
+            </p>
+
+            {/* Delivery Method Selector Cards */}
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              {deliveryMethods.map((option) => {
+                const isSelected = selectedDeliveryMethod === option.id;
+                const OptionIcon =
+                  option.id === 'motor_park'
+                    ? Bus
+                    : option.id === 'jumia' || option.id === 'fez'
+                    ? PackageCheck
+                    : Truck;
+
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedDeliveryMethod(option.id as DeliveryMethodId);
+                      setErrors((prev) => {
+                        const next = { ...prev };
+                        delete next.parkBusCompany;
+                        delete next.parkLocation;
+                        delete next.address;
+                        delete next.lga;
+                        return next;
+                      });
+                    }}
+                    className={`flex flex-col justify-between rounded-3xl border-2 p-4 text-left transition-all cursor-pointer ${
+                      isSelected
+                        ? 'border-blush-500 bg-blush-50/70 shadow-sm'
+                        : 'border-blush-100 bg-white hover:border-blush-200'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2 w-full">
+                      <div className="flex items-center gap-2.5">
+                        <span
+                          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
+                            isSelected ? 'bg-blush-500 text-white' : 'bg-blush-50 text-blush-400'
+                          }`}
+                        >
+                          <OptionIcon className="h-4 w-4" />
+                        </span>
+                        <div>
+                          <p className="text-sm font-semibold text-berry-800">{option.name}</p>
+                          <span className="inline-block mt-0.5 text-xs font-bold text-blush-600">
+                            {option.fee === 0 ? 'Free Delivery' : formatNaira(option.fee)}
+                          </span>
+                        </div>
+                      </div>
+                      <span
+                        className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 ${
+                          isSelected ? 'border-blush-500 bg-blush-500' : 'border-blush-200'
+                        }`}
+                      >
+                        {isSelected && <Check className="h-3 w-3 text-white" />}
+                      </span>
+                    </div>
+                    <p className="mt-2.5 text-xs text-berry-400 leading-relaxed">
+                      {option.description}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Conditional Motor Park / Bus Pickup Fields */}
+            {selectedDeliveryMethod === 'motor_park' && (
+              <div className="mt-5 rounded-3xl border border-blush-200 bg-blush-50/50 p-4 sm:p-5 space-y-4 animate-fade-in-down">
+                <div className="flex items-center gap-2 text-xs font-semibold text-berry-800">
+                  <Bus className="h-4 w-4 text-blush-500 shrink-0" />
+                  <span>Motor Park / Bus Pickup Details</span>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field label="Park/Bus Company Name" error={errors.parkBusCompany}>
+                    <input
+                      className="input-jazelle bg-white"
+                      value={form.parkBusCompany}
+                      onChange={(e) => setForm({ ...form, parkBusCompany: e.target.value })}
+                      placeholder="e.g. GIGM, ABC Transport, Peace Mass, GUO"
+                    />
+                  </Field>
+                  <Field label="Destination City/Park Location" error={errors.parkLocation}>
+                    <input
+                      className="input-jazelle bg-white"
+                      value={form.parkLocation}
+                      onChange={(e) => setForm({ ...form, parkLocation: e.target.value })}
+                      placeholder="e.g. Sabon Gari Park, Kano / Jibowu, Lagos"
+                    />
+                  </Field>
+                </div>
+              </div>
+            )}
+
+            <div className="mt-5 space-y-4">
+              <Field
+                label={
+                  selectedDeliveryMethod === 'motor_park'
+                    ? 'Contact / Backup street address (optional for park pickup)'
+                    : 'Street address'
+                }
+                error={errors.address}
+              >
                 <input
                   className="input-jazelle"
                   value={form.address}
@@ -708,7 +912,14 @@ export default function CheckoutPage() {
                     <ChevronDown className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 h-4 w-4 text-blush-300" />
                   </div>
                 </Field>
-                <Field label="LGA / City area" error={errors.lga}>
+                <Field
+                  label={
+                    selectedDeliveryMethod === 'motor_park'
+                      ? 'LGA / City area (optional)'
+                      : 'LGA / City area'
+                  }
+                  error={errors.lga}
+                >
                   <input
                     className="input-jazelle"
                     value={form.lga}
@@ -891,7 +1102,7 @@ export default function CheckoutPage() {
                 </div>
               )}
               <div className="flex justify-between text-berry-500">
-                <span>Delivery across Nigeria</span>
+                <span>Delivery ({getDeliveryMethodLabel(selectedDeliveryMethod)})</span>
                 <span className="font-medium text-berry-700">
                   {deliveryFee === 0 ? (
                     <span className="text-sage-600 font-semibold">Free Delivery</span>

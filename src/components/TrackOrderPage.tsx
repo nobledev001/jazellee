@@ -1,8 +1,13 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Package, CheckCircle2, Truck, Home, Search, Clock } from 'lucide-react';
+import { Package, CheckCircle2, Truck, Home, Search, Clock, ExternalLink, Bus, Copy, Check } from 'lucide-react';
 import { formatNaira } from '@/lib/format';
 import { useRouter } from '@/router';
 import { supabase } from '@/lib/auth';
+import {
+  extractOrderDeliveryInfo,
+  FEZ_TRACKING_URL,
+  JUMIA_TRACKING_URL,
+} from '@/lib/delivery';
 
 type Status = 'placed' | 'processing' | 'shipped' | 'delivered';
 
@@ -12,6 +17,9 @@ interface OrderItem {
   price: number;
   quantity: number;
   image: string;
+  delivery_method?: string;
+  delivery_method_details?: { park_name?: string; park_location?: string };
+  tracking_number?: string;
 }
 
 interface Order {
@@ -23,6 +31,9 @@ interface Order {
   coupon_code?: string | null;
   total: number;
   status: Status;
+  delivery_method?: string;
+  delivery_method_details?: { park_name?: string; park_location?: string } | null;
+  tracking_number?: string;
   customer_name: string;
   delivery_address: string;
   delivery_state: string;
@@ -97,7 +108,19 @@ export default function TrackOrderPage() {
     }
   }, [initialId, initialContact, findOrder]);
 
+  const [copiedTracking, setCopiedTracking] = useState(false);
+
   const currentStepIndex = order ? STATUS_STEPS.findIndex((s) => s.key === order.status) : -1;
+  const deliveryInfo = order
+    ? extractOrderDeliveryInfo(order as unknown as Record<string, unknown>)
+    : null;
+
+  const handleCopyTracking = (code: string) => {
+    if (!code) return;
+    navigator.clipboard?.writeText(code);
+    setCopiedTracking(true);
+    setTimeout(() => setCopiedTracking(false), 2000);
+  };
 
   return (
     <main className="container-jazelle py-10 sm:py-14">
@@ -141,10 +164,10 @@ export default function TrackOrderPage() {
           </div>
         )}
 
-        {order && (
+        {order && deliveryInfo && (
           <>
             <div className="mt-6 rounded-4xl bg-white p-6 shadow-soft">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <p className="text-xs text-berry-400">Order ID</p>
                   <p className="text-lg font-bold text-berry-800">{order.order_number}</p>
@@ -160,7 +183,128 @@ export default function TrackOrderPage() {
                   </p>
                 </div>
               </div>
+              <div className="mt-3 pt-3 border-t border-blush-100 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-blush-50 px-3 py-1 font-semibold text-blush-700">
+                  {deliveryInfo.deliveryMethod === 'motor_park' ? (
+                    <Bus className="h-3.5 w-3.5" />
+                  ) : (
+                    <Truck className="h-3.5 w-3.5" />
+                  )}
+                  <span>{deliveryInfo.fulfillmentSummary}</span>
+                </span>
+                {deliveryInfo.trackingNumber && (
+                  <span className="font-mono font-bold text-berry-800 bg-sage-50 border border-sage-200 px-3 py-1 rounded-full">
+                    Waybill / Tracking: {deliveryInfo.trackingNumber}
+                  </span>
+                )}
+              </div>
             </div>
+
+            {/* Delivery Tracking & Waybill Card */}
+            {(deliveryInfo.trackingNumber || deliveryInfo.deliveryMethod === 'motor_park') && (
+              <div className="mt-4 rounded-4xl bg-white p-6 shadow-soft sm:p-8 border-2 border-blush-200">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <span className="inline-block rounded-full bg-blush-100 px-3 py-0.5 text-[11px] font-bold uppercase tracking-wider text-blush-700">
+                      Delivery &amp; Tracking Details
+                    </span>
+                    <h2 className="mt-1.5 font-display text-lg font-medium text-berry-800">
+                      Your order is on its way via {deliveryInfo.deliveryMethodLabel}
+                    </h2>
+                  </div>
+                </div>
+
+                {deliveryInfo.trackingNumber && (
+                  <div className="mt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-3xl bg-blush-50/70 p-4 border border-blush-200">
+                    <div>
+                      <p className="text-[11px] font-bold uppercase tracking-wider text-berry-400">
+                        Tracking Number / Waybill
+                      </p>
+                      <p className="mt-0.5 font-mono text-lg font-extrabold text-berry-900 tracking-wide">
+                        {deliveryInfo.trackingNumber}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleCopyTracking(deliveryInfo.trackingNumber)}
+                      className="inline-flex items-center justify-center gap-1.5 rounded-full bg-white border border-blush-200 px-3.5 py-1.5 text-xs font-semibold text-berry-700 hover:bg-blush-100 transition-colors cursor-pointer self-start sm:self-center"
+                    >
+                      {copiedTracking ? (
+                        <>
+                          <Check className="h-3.5 w-3.5 text-sage-600" />
+                          <span>Copied!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="h-3.5 w-3.5 text-blush-500" />
+                          <span>Copy Number</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
+
+                {deliveryInfo.deliveryMethod === 'jumia' && deliveryInfo.trackingNumber && (
+                  <div className="mt-4 space-y-3 text-sm text-berry-600">
+                    <p>
+                      Open Jumia&apos;s package tracking page below and enter your tracking number{' '}
+                      <strong className="font-mono text-berry-800">{deliveryInfo.trackingNumber}</strong> to view live delivery updates:
+                    </p>
+                    <a
+                      href={JUMIA_TRACKING_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="btn-primary inline-flex items-center gap-2 text-xs"
+                    >
+                      <span>Track on Jumia Delivery</span>
+                      <ExternalLink className="h-3.5 w-3.5" />
+                    </a>
+                  </div>
+                )}
+
+                {deliveryInfo.deliveryMethod === 'fez' && deliveryInfo.trackingNumber && (
+                  <div className="mt-4 space-y-3 text-sm text-berry-600">
+                    <p>
+                      Open Fez Delivery&apos;s tracking page below and enter your tracking number{' '}
+                      <strong className="font-mono text-berry-800">{deliveryInfo.trackingNumber}</strong> to monitor your shipment in real time:
+                    </p>
+                    <a
+                      href={FEZ_TRACKING_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="btn-primary inline-flex items-center gap-2 text-xs"
+                    >
+                      <span>Track on Fez Delivery</span>
+                      <ExternalLink className="h-3.5 w-3.5" />
+                    </a>
+                  </div>
+                )}
+
+                {deliveryInfo.deliveryMethod === 'motor_park' && (
+                  <div className="mt-4 space-y-2 text-sm text-berry-600">
+                    <p>
+                      Motor Park / Bus Pickup orders are dispatched directly via interstate bus waybill rather than online courier tracking. Please use the pickup details below when collecting your package at the park:
+                    </p>
+                    <div className="rounded-2xl bg-blush-50/50 p-4 border border-blush-100 text-xs text-berry-800 space-y-1.5">
+                      <p>
+                        <strong>Park / Bus Company Name:</strong>{' '}
+                        {deliveryInfo.deliveryDetails.park_name || 'Specified at checkout'}
+                      </p>
+                      <p>
+                        <strong>Destination City / Park Location:</strong>{' '}
+                        {deliveryInfo.deliveryDetails.park_location || `${order.delivery_lga}, ${order.delivery_state}`}
+                      </p>
+                      {deliveryInfo.trackingNumber && (
+                        <p>
+                          <strong>Waybill / Driver Reference:</strong>{' '}
+                          <span className="font-mono font-bold">{deliveryInfo.trackingNumber}</span>
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="mt-4 rounded-4xl bg-white p-6 shadow-soft sm:p-8">
               <h2 className="font-display text-lg font-medium text-berry-800">Order status</h2>
@@ -223,9 +367,19 @@ export default function TrackOrderPage() {
                   </div>
                 ))}
               </div>
-              <div className="mt-4 border-t border-blush-100 pt-4 flex justify-between text-base font-bold text-berry-800">
-                <span>Total</span>
-                <span>{formatNaira(order.total)}</span>
+              <div className="mt-4 border-t border-blush-100 pt-4 space-y-1.5 text-sm">
+                <div className="flex justify-between text-berry-500">
+                  <span>Subtotal</span>
+                  <span>{formatNaira(order.subtotal)}</span>
+                </div>
+                <div className="flex justify-between text-berry-500">
+                  <span>Delivery ({deliveryInfo.deliveryMethodLabel})</span>
+                  <span>{order.delivery_fee === 0 ? 'Free' : formatNaira(order.delivery_fee)}</span>
+                </div>
+                <div className="flex justify-between pt-2 border-t border-blush-100 text-base font-bold text-berry-800">
+                  <span>Total</span>
+                  <span>{formatNaira(order.total)}</span>
+                </div>
               </div>
             </div>
 

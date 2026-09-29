@@ -2,6 +2,13 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { dbProductToProduct, getProduct as getCatalogProduct, PRODUCTS, type Product } from '@/lib/catalog';
 import { supabase } from '@/lib/supabaseClient';
 import { useSiteSettings } from '@/context/SiteSettingsContext';
+import {
+  calculateDeliveryFeeForMethod,
+  getDeliveryMethodOptions,
+  normalizeDeliveryMethodId,
+  type DeliveryMethodId,
+  type DeliveryMethodOption,
+} from '@/lib/delivery';
 
 export interface AppliedCoupon {
   code: string;
@@ -9,8 +16,7 @@ export interface AppliedCoupon {
   discount_value: number;
 }
 
-const DEFAULT_DELIVERY_FEE = 3500;
-const FALLBACK_FREE_SHIPPING_THRESHOLD = 40000;
+const FALLBACK_FREE_SHIPPING_THRESHOLD = 35000;
 
 interface StoreValue {
   products: Product[];
@@ -20,6 +26,9 @@ interface StoreValue {
   cartCount: number;
   cartSubtotal: number;
   freeDeliveryThreshold: number;
+  selectedDeliveryMethod: DeliveryMethodId;
+  setSelectedDeliveryMethod: (method: DeliveryMethodId) => void;
+  deliveryMethods: DeliveryMethodOption[];
   deliveryFee: number;
   remainingForFreeDelivery: number;
   appliedCoupon: AppliedCoupon | null;
@@ -58,6 +67,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [appliedCoupon, setAppliedCoupon] = useState<AppliedCoupon | null>(() =>
     readStorage<AppliedCoupon | null>('jazelle-applied-coupon', null)
   );
+  const [selectedDeliveryMethod, setSelectedDeliveryMethodState] = useState<DeliveryMethodId>(() =>
+    normalizeDeliveryMethodId(readStorage<string>('jazelle-delivery-method', 'standard'))
+  );
+
+  const setSelectedDeliveryMethod = useCallback((method: DeliveryMethodId) => {
+    const clean = normalizeDeliveryMethodId(method);
+    setSelectedDeliveryMethodState(clean);
+    try {
+      localStorage.setItem('jazelle-delivery-method', JSON.stringify(clean));
+    } catch {
+      // ignore
+    }
+  }, []);
 
   const loadProducts = useCallback(async () => {
     setIsLoadingProducts(true);
@@ -218,8 +240,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         ? parsedThreshold
         : FALLBACK_FREE_SHIPPING_THRESHOLD;
 
-    const deliveryFee =
-      cartSubtotal === 0 || cartSubtotal >= freeDeliveryThreshold ? 0 : DEFAULT_DELIVERY_FEE;
+    const deliveryMethods = getDeliveryMethodOptions(cartSubtotal, settings);
+    const deliveryFee = calculateDeliveryFeeForMethod(
+      selectedDeliveryMethod,
+      cartSubtotal,
+      settings
+    );
     const remainingForFreeDelivery = Math.max(0, freeDeliveryThreshold - cartSubtotal);
 
     let discountAmount = 0;
@@ -244,6 +270,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       cartCount: cartProducts.reduce((sum, item) => sum + item.quantity, 0),
       cartSubtotal,
       freeDeliveryThreshold,
+      selectedDeliveryMethod,
+      setSelectedDeliveryMethod,
+      deliveryMethods,
       deliveryFee,
       remainingForFreeDelivery,
       appliedCoupon,
@@ -286,7 +315,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     isLoadingProducts,
     cart,
     wishlist,
-    settings.free_delivery_threshold,
+    settings,
+    selectedDeliveryMethod,
+    setSelectedDeliveryMethod,
     appliedCoupon,
     getProductBySlug,
     loadProducts,
