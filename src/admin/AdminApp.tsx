@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react';
+import ErrorBoundary from '@/components/ErrorBoundary';
 import { AdminAuthProvider, useAdminAuth } from './AdminAuth';
 import AdminLogin from './pages/AdminLogin';
 import AdminLayout from './AdminLayout';
@@ -68,8 +69,10 @@ function AdminAppContent() {
 
 export default function AdminApp() {
   return (
-    <AdminAuthProvider>
-      <AdminAppContent />
-    </AdminAuthProvider>
+    <ErrorBoundary>
+      <AdminAuthProvider>
+        <AdminAppContent />
+      </AdminAuthProvider>
+    </ErrorBoundary>
   );
 }

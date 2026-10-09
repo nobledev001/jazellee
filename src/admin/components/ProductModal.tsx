@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, Upload, Trash2, Check, AlertCircle, Loader2, Image as ImageIcon } from 'lucide-react';
+import { X, Trash2, AlertCircle, Loader2, Plus } from 'lucide-react';
 import { supabase, type DbProduct, uploadProductImage } from '../supabase';
+import ImageUploadField from './ImageUploadField';
 
 interface ProductModalProps {
   isOpen: boolean;
@@ -32,15 +33,15 @@ export default function ProductModal({ isOpen, onClose, onSaved, product }: Prod
   const [whatItDoes, setWhatItDoes] = useState('');
   const [label, setLabel] = useState('none');
   const [imageUrl, setImageUrl] = useState('');
-  const [imageFile, setImageFile] = useState<File | null>(null);
-  const [imagePreview, setImagePreview] = useState('');
+  const [gallery, setGallery] = useState<string[]>([]);
+  const [isUploadingGallery, setIsUploadingGallery] = useState(false);
+  const [galleryError, setGalleryError] = useState<string | null>(null);
   const [isActive, setIsActive] = useState(true);
 
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [isDragOver, setIsDragOver] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const galleryFileInputRef = useRef<HTMLInputElement>(null);
 
   const isEditing = Boolean(product?.id || product?.slug);
 
@@ -60,11 +61,15 @@ export default function ProductModal({ isOpen, onClose, onSaved, product }: Prod
         : (product.what_it_does || '');
       setIngredients(ingredientsText);
       setLabel(product.label || 'none');
-      setImageUrl(product.image || '');
-      setImagePreview(product.image || '');
-      setImageFile(null);
+      const mainImg = product.image || '';
+      setImageUrl(mainImg);
+      const existingGallery = Array.isArray(product.gallery) && product.gallery.length > 0
+        ? product.gallery.filter(Boolean)
+        : (mainImg ? [mainImg] : []);
+      setGallery(existingGallery);
       setIsActive(product.is_active ?? true);
       setError(null);
+      setGalleryError(null);
     } else {
       // Defaults for new product
       setName('');
@@ -77,13 +82,39 @@ export default function ProductModal({ isOpen, onClose, onSaved, product }: Prod
       setIngredients('Niacinamide (5%)\nHyaluronic Acid\nCentella Asiatica\nAfrican Shea Butter');
       setWhatItDoes('Hydrates, calms inflammation, and locks in moisture for long-lasting barrier strength.');
       setLabel('none');
-      setImageUrl('https://images.unsplash.com/photo-1608248597359-00f803c035fa?w=800&auto=format&fit=crop&q=80');
-      setImagePreview('https://images.unsplash.com/photo-1608248597359-00f803c035fa?w=800&auto=format&fit=crop&q=80');
-      setImageFile(null);
+      const defaultImg = 'https://images.unsplash.com/photo-1608248597359-00f803c035fa?w=800&auto=format&fit=crop&q=80';
+      setImageUrl(defaultImg);
+      setGallery([defaultImg]);
       setIsActive(true);
       setError(null);
+      setGalleryError(null);
     }
   }, [product, isOpen]);
+
+  const handleGalleryUpload = async (file: File) => {
+    setGalleryError(null);
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/avif'];
+    if (!allowedTypes.includes(file.type.toLowerCase())) {
+      setGalleryError('Please select a valid image format (JPEG, PNG, WEBP, or AVIF).');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setGalleryError('Image size exceeds 5MB limit. Please select a smaller photo.');
+      return;
+    }
+
+    try {
+      setIsUploadingGallery(true);
+      const uploadedUrl = await uploadProductImage(file, 'product-images');
+      setGallery((prev) => [...prev, uploadedUrl]);
+    } catch (err: unknown) {
+      console.error('Failed to upload gallery image:', err);
+      const msg = err instanceof Error ? err.message : 'Failed to upload image. Please try again.';
+      setGalleryError(msg);
+    } finally {
+      setIsUploadingGallery(false);
+    }
+  };
 
   // Auto-generate slug from name if creating
   const handleNameChange = (val: string) => {
@@ -94,34 +125,6 @@ export default function ProductModal({ isOpen, onClose, onSaved, product }: Prod
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/(^-|-$)/g, '');
       setSlug(generated);
-    }
-  };
-
-  const handleFileSelect = (file: File) => {
-    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/avif'];
-    const maxSizeBytes = 5 * 1024 * 1024; // 5 MB
-
-    if (!allowedTypes.includes(file.type.toLowerCase())) {
-      setError('Invalid file format. Please upload a JPEG, PNG, WEBP, or AVIF image (SVGs and executables are blocked).');
-      return;
-    }
-
-    if (file.size > maxSizeBytes) {
-      setError(`Image size exceeds 5MB limit (${(file.size / (1024 * 1024)).toFixed(1)}MB). Please compress the image.`);
-      return;
-    }
-
-    setError(null);
-    setImageFile(file);
-    const preview = URL.createObjectURL(file);
-    setImagePreview(preview);
-  };
-
-  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    setIsDragOver(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      handleFileSelect(e.dataTransfer.files[0]);
     }
   };
 
@@ -140,14 +143,10 @@ export default function ProductModal({ isOpen, onClose, onSaved, product }: Prod
       setSaving(true);
       setError(null);
 
-      // 1. Upload image if a file was selected
-      let finalImageUrl = imageUrl.trim();
-      if (imageFile) {
-        finalImageUrl = await uploadProductImage(imageFile, 'product-images');
-      }
-
-      if (!finalImageUrl) {
-        finalImageUrl = 'https://images.unsplash.com/photo-1556228720-195a672e8a03?w=800&auto=format&fit=crop&q=80';
+      const finalImageUrl = imageUrl.trim() || 'https://images.unsplash.com/photo-1556228720-195a672e8a03?w=800&auto=format&fit=crop&q=80';
+      const cleanGallery = gallery.filter((url) => typeof url === 'string' && url.trim().length > 0);
+      if (!cleanGallery.includes(finalImageUrl)) {
+        cleanGallery.unshift(finalImageUrl);
       }
 
       // Format ingredients into features array
@@ -172,7 +171,7 @@ export default function ProductModal({ isOpen, onClose, onSaved, product }: Prod
         features: featuresArray,
         label: promoBadge,
         image: finalImageUrl,
-        gallery: product?.gallery && product.gallery.length > 0 ? product.gallery : [finalImageUrl],
+        gallery: cleanGallery,
         is_active: isActive,
         updated_at: new Date().toISOString(),
       };
@@ -394,82 +393,127 @@ export default function ProductModal({ isOpen, onClose, onSaved, product }: Prod
             </div>
           </div>
 
-          {/* Image Upload Area */}
+          {/* Primary Product Image */}
           <div>
-            <label className="block text-xs font-semibold text-gray-700 mb-1">
-              Product Image (Supabase Storage) <span className="text-pink-600">*</span>
-            </label>
-            <div
-              onDragOver={(e) => {
-                e.preventDefault();
-                setIsDragOver(true);
+            <ImageUploadField
+              label="Primary Product Image (Front Catalog Showcase)"
+              value={imageUrl}
+              onChange={(url) => {
+                setImageUrl(url);
+                if (url && !gallery.includes(url)) {
+                  setGallery((prev) => [url, ...prev.filter((item) => item !== url)]);
+                }
               }}
-              onDragLeave={() => setIsDragOver(false)}
-              onDrop={handleDrop}
-              onClick={() => fileInputRef.current?.click()}
-              className={`border-2 border-dashed rounded-xl p-4 flex flex-col sm:flex-row items-center gap-4 cursor-pointer transition-colors ${
-                isDragOver ? 'border-pink-500 bg-pink-50/50' : 'border-gray-200 hover:border-pink-300 hover:bg-gray-50/50'
-              }`}
-            >
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={(e) => {
-                  if (e.target.files && e.target.files[0]) {
-                    handleFileSelect(e.target.files[0]);
-                  }
-                }}
-              />
+              bucketName="product-images"
+              aspectRatioLabel="Square 1:1 or 4:5 portrait (min 800×800)"
+              helpText="Upload the main product bottle/jar photo from your device. Displays on shop catalog and product card."
+              required
+              previewClassName="h-24 w-24 rounded-xl"
+            />
+          </div>
 
-              {imagePreview ? (
-                <div className="relative group shrink-0">
-                  <img
-                    src={imagePreview}
-                    alt="Preview"
-                    className="h-20 w-20 object-cover rounded-lg border border-gray-200 bg-gray-100 shadow-xs"
-                  />
-                  <div className="absolute inset-0 bg-black/40 rounded-lg flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                    <span className="text-[10px] text-white font-medium">Change</span>
-                  </div>
-                </div>
-              ) : (
-                <div className="h-20 w-20 rounded-lg bg-gray-100 border border-gray-200 flex items-center justify-center text-gray-400 shrink-0">
-                  <ImageIcon className="h-8 w-8" />
-                </div>
-              )}
-
-              <div className="flex-1 text-center sm:text-left">
-                <div className="flex items-center justify-center sm:justify-start gap-1 text-pink-600 font-medium">
-                  <Upload className="h-4 w-4" />
-                  <span>Click to browse or drag & drop</span>
-                </div>
-                <p className="text-xs text-gray-400 mt-1">
-                  Upload directly to the <code className="bg-gray-100 px-1 py-0.5 rounded text-gray-600">product-images</code> Supabase bucket. PNG, JPG, or WEBP.
+          {/* Additional Product Photo Gallery */}
+          <div className="rounded-xl border border-gray-200 p-4 bg-gray-50/50 space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="block text-xs font-semibold text-gray-800">
+                  Additional Gallery Photos
+                </label>
+                <p className="text-[11px] text-gray-500">
+                  Upload multiple angles, texture shots, or packaging photos from your device.
                 </p>
-                {imageFile && (
-                  <div className="text-xs font-semibold text-emerald-600 mt-1 flex items-center gap-1">
-                    <Check className="h-3 w-3" /> Selected: {imageFile.name} ({(imageFile.size / 1024).toFixed(0)} KB)
-                  </div>
-                )}
               </div>
+              <button
+                type="button"
+                disabled={isUploadingGallery}
+                onClick={() => galleryFileInputRef.current?.click()}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-pink-600 hover:bg-pink-500 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+              >
+                {isUploadingGallery ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Plus className="h-3.5 w-3.5" />
+                )}
+                <span>{isUploadingGallery ? 'Uploading…' : 'Add from Device'}</span>
+              </button>
             </div>
 
-            {/* Direct URL input fallback */}
-            <div className="mt-2 flex items-center gap-2">
-              <span className="text-xs text-gray-400">Or image URL:</span>
-              <input
-                type="url"
-                value={imageUrl}
-                onChange={(e) => {
-                  setImageUrl(e.target.value);
-                  if (!imageFile) setImagePreview(e.target.value);
-                }}
-                placeholder="https://images.unsplash.com/..."
-                className="flex-1 text-xs text-gray-600 rounded-md border border-gray-200 px-2 py-1 focus:outline-none focus:border-pink-500"
-              />
-            </div>
+            {/* Hidden file input for gallery */}
+            <input
+              ref={galleryFileInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/avif"
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files && e.target.files[0]) {
+                  void handleGalleryUpload(e.target.files[0]);
+                  e.target.value = '';
+                }
+              }}
+            />
+
+            {galleryError && (
+              <div className="flex items-center gap-2 p-2 bg-red-50 border border-red-200 rounded-lg text-red-700 text-xs">
+                <AlertCircle className="h-4 w-4 shrink-0 text-red-500" />
+                <span>{galleryError}</span>
+              </div>
+            )}
+
+            {/* Gallery thumbnails grid */}
+            {gallery.length > 0 ? (
+              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3 pt-1">
+                {gallery.map((imgUrl, index) => {
+                  const isPrimary = imgUrl === imageUrl;
+                  return (
+                    <div
+                      key={`${imgUrl}-${index}`}
+                      className={`relative group rounded-xl overflow-hidden border-2 bg-white aspect-square flex items-center justify-center ${
+                        isPrimary ? 'border-pink-500 ring-2 ring-pink-200' : 'border-gray-200'
+                      }`}
+                    >
+                      <img
+                        src={imgUrl}
+                        alt={`Gallery ${index + 1}`}
+                        className="h-full w-full object-cover"
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).src =
+                            'https://images.unsplash.com/photo-1556228720-195a672e8a03?w=800&auto=format&fit=crop&q=80';
+                        }}
+                      />
+                      {isPrimary && (
+                        <span className="absolute top-1 left-1 bg-pink-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded shadow-2xs">
+                          Primary
+                        </span>
+                      )}
+                      <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5 p-1">
+                        {!isPrimary && (
+                          <button
+                            type="button"
+                            onClick={() => setImageUrl(imgUrl)}
+                            className="bg-white/90 hover:bg-white text-gray-800 text-[10px] font-semibold px-1.5 py-1 rounded cursor-pointer shadow-xs"
+                            title="Make primary image"
+                          >
+                            Set Main
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setGallery((prev) => prev.filter((_, i) => i !== index))}
+                          className="bg-red-600 hover:bg-red-500 text-white p-1 rounded-full cursor-pointer shadow-xs"
+                          title="Remove from gallery"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-xs text-gray-400 italic py-1">
+                No additional gallery photos added yet. Click &quot;Add from Device&quot; to upload more views.
+              </p>
+            )}
           </div>
 
           {/* Description */}

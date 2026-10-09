@@ -36,6 +36,18 @@ export interface SiteSettings {
   testimonials_title: string;
   testimonials_subtitle: string;
 
+  // Shop By Concern Section
+  concern_section_title: string;
+  concern_section_subtitle: string;
+  concern_section_description: string;
+  concern_image_dark_spots: string;
+  concern_image_dry_skin: string;
+  concern_image_uneven_tone: string;
+  concern_image_body_bumps: string;
+  concern_image_dull_skin: string;
+  concern_image_sun_protection: string;
+  concern_image_soft_fresh: string;
+
   // Store & Contact Info
   announcement_bar: string;
   whatsapp_number: string;
@@ -46,7 +58,6 @@ export interface SiteSettings {
   free_delivery_threshold: string;
   standard_delivery_fee: string;
   delivery_fee_motor_park: string;
-  delivery_fee_jumia: string;
   delivery_fee_fez: string;
   [key: string]: string;
 }
@@ -87,6 +98,18 @@ export const DEFAULT_SITE_SETTINGS: SiteSettings = {
   testimonials_title: 'Sweet words from the Haven',
   testimonials_subtitle: 'Real Customer Love',
 
+  concern_section_title: 'Shop By Concern',
+  concern_section_subtitle: 'Find Your Match',
+  concern_section_description:
+    "Tell us what's bothering you and we'll point you to the right picks. No jargon, just solutions.",
+  concern_image_dark_spots: '',
+  concern_image_dry_skin: '',
+  concern_image_uneven_tone: '',
+  concern_image_body_bumps: '',
+  concern_image_dull_skin: '',
+  concern_image_sun_protection: '',
+  concern_image_soft_fresh: '',
+
   announcement_bar: 'Free delivery on orders over ₦35,000 • Nationwide shipping across Nigeria',
   whatsapp_number: '2347017186752',
   support_phone: '+234 701 718 6752',
@@ -97,8 +120,7 @@ export const DEFAULT_SITE_SETTINGS: SiteSettings = {
   free_delivery_threshold: '35000',
   standard_delivery_fee: '3500',
   delivery_fee_motor_park: '2000',
-  delivery_fee_jumia: '3000',
-  delivery_fee_fez: '2500',
+  delivery_fee_fez: '0',
 };
 
 interface SiteSettingsContextValue {

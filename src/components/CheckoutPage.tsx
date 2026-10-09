@@ -8,6 +8,7 @@ import { sendOrderConfirmationEmail } from '@/lib/email';
 import {
   extractOrderDeliveryInfo,
   getDeliveryMethodLabel,
+  FEZ_CHECKOUT_NOTE,
   type DeliveryMethodDetails,
   type DeliveryMethodId,
 } from '@/lib/delivery';
@@ -793,7 +794,7 @@ export default function CheckoutPage() {
                 const OptionIcon =
                   option.id === 'motor_park'
                     ? Bus
-                    : option.id === 'jumia' || option.id === 'fez'
+                    : option.id === 'fez'
                     ? PackageCheck
                     : Truck;
 
@@ -830,7 +831,11 @@ export default function CheckoutPage() {
                         <div>
                           <p className="text-sm font-semibold text-berry-800">{option.name}</p>
                           <span className="inline-block mt-0.5 text-xs font-bold text-blush-600">
-                            {option.fee === 0 ? 'Free Delivery' : formatNaira(option.fee)}
+                            {option.externalCourier
+                              ? '₦0 on site (Paid to courier)'
+                              : option.fee === 0
+                              ? 'Free Delivery'
+                              : formatNaira(option.fee)}
                           </span>
                         </div>
                       </div>
@@ -849,6 +854,23 @@ export default function CheckoutPage() {
                 );
               })}
             </div>
+
+            {/* Explanatory Note when Fez Delivery is selected */}
+            {selectedDeliveryMethod === 'fez' && (
+              <div className="mt-5 rounded-3xl border border-blush-200 bg-blush-50/70 p-4 sm:p-5 animate-fade-in-down">
+                <div className="flex items-start gap-3">
+                  <PackageCheck className="h-5 w-5 text-blush-600 shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <p className="text-xs font-bold uppercase tracking-wider text-berry-800">
+                      Fez Delivery — External Shipping
+                    </p>
+                    <p className="text-sm font-medium text-berry-700 leading-relaxed">
+                      {FEZ_CHECKOUT_NOTE}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Conditional Motor Park / Bus Pickup Fields */}
             {selectedDeliveryMethod === 'motor_park' && (
@@ -1104,7 +1126,9 @@ export default function CheckoutPage() {
               <div className="flex justify-between text-berry-500">
                 <span>Delivery ({getDeliveryMethodLabel(selectedDeliveryMethod)})</span>
                 <span className="font-medium text-berry-700">
-                  {deliveryFee === 0 ? (
+                  {selectedDeliveryMethod === 'fez' ? (
+                    <span className="text-berry-600 font-semibold">₦0 (Paid to courier)</span>
+                  ) : deliveryFee === 0 ? (
                     <span className="text-sage-600 font-semibold">Free Delivery</span>
                   ) : (
                     formatNaira(deliveryFee)

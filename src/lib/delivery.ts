@@ -1,6 +1,6 @@
 import { formatNaira } from './format';
 
-export type DeliveryMethodId = 'standard' | 'motor_park' | 'jumia' | 'fez';
+export type DeliveryMethodId = 'standard' | 'motor_park' | 'fez';
 
 export interface DeliveryMethodDetails {
   park_name?: string;
@@ -14,6 +14,8 @@ export interface DeliveryMethodOption {
   description: string;
   fee: number;
   isFreeEligible: boolean;
+  externalCourier: boolean;
+  checkoutNote?: string;
   requiresParkDetails: boolean;
   supportsTrackingNumber: boolean;
   trackingUrl?: string;
@@ -24,20 +26,18 @@ export const DEFAULT_DELIVERY_SETTINGS = {
   standard_delivery_fee: 3500,
   free_delivery_threshold: 35000,
   delivery_fee_motor_park: 2000,
-  delivery_fee_jumia: 3000,
-  delivery_fee_fez: 2500,
+  delivery_fee_fez: 0,
 } as const;
 
-export const JUMIA_TRACKING_URL = 'https://www.jumia.com.ng/tracking';
+export const FEZ_CHECKOUT_NOTE =
+  'Fez Delivery will contact you directly to arrange delivery and payment for shipping based on your location.';
+
 export const FEZ_TRACKING_URL = 'https://www.fezdelivery.co/track-delivery';
 
 export function normalizeDeliveryMethodId(raw?: unknown): DeliveryMethodId {
   const val = String(raw || '').trim().toLowerCase();
   if (val === 'motor_park' || val === 'motorpark' || val === 'bus_pickup' || val === 'park') {
     return 'motor_park';
-  }
-  if (val === 'jumia' || val === 'jumia_delivery') {
-    return 'jumia';
   }
   if (val === 'fez' || val === 'fez_delivery') {
     return 'fez';
@@ -50,8 +50,6 @@ export function getDeliveryMethodLabel(method?: unknown): string {
   switch (id) {
     case 'motor_park':
       return 'Motor Park / Bus Pickup';
-    case 'jumia':
-      return 'Jumia Delivery';
     case 'fez':
       return 'Fez Delivery';
     case 'standard':
@@ -75,7 +73,9 @@ export function parseSettingNumber(
 /**
  * Calculates the authoritative delivery fee for a given delivery method and cart subtotal
  * using prices configured in site_settings.
- * The selected delivery method's price replaces the standard delivery fee (does not add on top).
+ * - Motor Park: reads delivery_fee_motor_park from site_settings
+ * - Fez: always 0 on this site (handled externally by courier until direct API integration is added)
+ * - Standard: uses standard_delivery_fee / free_delivery_threshold
  */
 export function calculateDeliveryFeeForMethod(
   method: unknown,
@@ -94,18 +94,10 @@ export function calculateDeliveryFeeForMethod(
     );
   }
 
-  if (id === 'jumia') {
-    return parseSettingNumber(
-      s.delivery_fee_jumia,
-      DEFAULT_DELIVERY_SETTINGS.delivery_fee_jumia
-    );
-  }
-
+  // Fez Delivery: No delivery fee is added to the order total on this site.
+  // The courier contacts the customer directly to arrange delivery and payment for shipping.
   if (id === 'fez') {
-    return parseSettingNumber(
-      s.delivery_fee_fez,
-      DEFAULT_DELIVERY_SETTINGS.delivery_fee_fez
-    );
+    return 0;
   }
 
   // Default / 'standard' doorstep delivery option
@@ -138,14 +130,6 @@ export function getDeliveryMethodOptions(
     s.delivery_fee_motor_park,
     DEFAULT_DELIVERY_SETTINGS.delivery_fee_motor_park
   );
-  const jumiaFee = parseSettingNumber(
-    s.delivery_fee_jumia,
-    DEFAULT_DELIVERY_SETTINGS.delivery_fee_jumia
-  );
-  const fezFee = parseSettingNumber(
-    s.delivery_fee_fez,
-    DEFAULT_DELIVERY_SETTINGS.delivery_fee_fez
-  );
 
   const standardEffectiveFee =
     subtotal > 0 && subtotal >= freeThreshold ? 0 : standardBaseFee;
@@ -158,6 +142,7 @@ export function getDeliveryMethodOptions(
       description: `Direct doorstep courier delivery (Free on orders over ${formatNaira(freeThreshold)})`,
       fee: standardEffectiveFee,
       isFreeEligible: true,
+      externalCourier: false,
       requiresParkDetails: false,
       supportsTrackingNumber: false,
     },
@@ -168,32 +153,21 @@ export function getDeliveryMethodOptions(
       description: 'Interstate bus/park waybill pickup — enter your preferred bus company and destination park',
       fee: motorParkFee,
       isFreeEligible: false,
+      externalCourier: false,
       requiresParkDetails: true,
       supportsTrackingNumber: true,
-    },
-    {
-      id: 'jumia',
-      name: 'Jumia Delivery',
-      shortLabel: 'Jumia Delivery',
-      description: 'Nationwide delivery via Jumia Logistics with online package tracking',
-      fee: jumiaFee,
-      isFreeEligible: false,
-      requiresParkDetails: false,
-      supportsTrackingNumber: true,
-      trackingUrl: JUMIA_TRACKING_URL,
-      trackingPlatformName: 'Jumia Package Tracking',
     },
     {
       id: 'fez',
       name: 'Fez Delivery',
       shortLabel: 'Fez Delivery',
-      description: 'Fast nationwide delivery via Fez Delivery Co. with real-time online tracking',
-      fee: fezFee,
+      description: 'Nationwide delivery via Fez Delivery (shipping arranged & paid directly with Fez)',
+      fee: 0,
       isFreeEligible: false,
+      externalCourier: true,
+      checkoutNote: FEZ_CHECKOUT_NOTE,
       requiresParkDetails: false,
-      supportsTrackingNumber: true,
-      trackingUrl: FEZ_TRACKING_URL,
-      trackingPlatformName: 'Fez Delivery Tracking',
+      supportsTrackingNumber: false,
     },
   ];
 }
@@ -210,6 +184,9 @@ export function formatAdminDeliverySummary(
     return parts.length > 0
       ? `Motor Park Pickup — ${parts.join(', ')}`
       : 'Motor Park Pickup';
+  }
+  if (id === 'fez') {
+    return 'Delivery: Fez Delivery — handled externally';
   }
   return getDeliveryMethodLabel(id);
 }
@@ -328,17 +305,15 @@ export function extractOrderDeliveryInfo(order: Record<string, unknown> | null |
       parts.length > 0
         ? `Deliver via: Motor Park Pickup — ${parts.join(', ')}`
         : 'Deliver via: Motor Park Pickup';
+  } else if (deliveryMethod === 'fez') {
+    fulfillmentSummary = 'Delivery: Fez Delivery — handled externally';
   }
 
-  const supportsTrackingNumber =
-    deliveryMethod === 'jumia' || deliveryMethod === 'fez' || deliveryMethod === 'motor_park';
+  // Only Motor Park orders use on-site tracking numbers and automatic tracking emails.
+  // Fez handles customer delivery communication and pricing externally.
+  const supportsTrackingNumber = deliveryMethod === 'motor_park';
 
-  const trackingUrl =
-    deliveryMethod === 'jumia'
-      ? JUMIA_TRACKING_URL
-      : deliveryMethod === 'fez'
-      ? FEZ_TRACKING_URL
-      : null;
+  const trackingUrl = null;
 
   return {
     deliveryMethod,

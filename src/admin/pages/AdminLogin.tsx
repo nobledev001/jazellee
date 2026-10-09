@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Lock, Mail, Eye, EyeOff } from 'lucide-react';
+import { Lock, Mail, Eye, EyeOff, AlertCircle } from 'lucide-react';
 import { useAdminAuth } from '../AdminAuth';
 import jazelleWordmark from '@/assets/images/jazelle_wordmark_transparent.png';
 
@@ -13,6 +13,7 @@ export default function AdminLogin() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     setError(null);
     setLoading(true);
 
@@ -23,15 +24,42 @@ export default function AdminLogin() {
       return;
     }
 
+    if (!password) {
+      setError('Please enter your password.');
+      setLoading(false);
+      return;
+    }
+
     try {
       const result = await signIn(cleanEmail, password);
-      if (result.error) {
-        setError(result.error);
-        setLoading(false);
+      if (result && result.error) {
+        let errorText = 'Invalid email or password. Please check your credentials and try again.';
+        if (typeof result.error === 'string') {
+          errorText = result.error;
+        } else if (result.error instanceof Error) {
+          errorText = result.error.message || errorText;
+        } else if (typeof result.error === 'object' && result.error !== null) {
+          const errObj = result.error as { message?: string; error_description?: string };
+          errorText = errObj.message || errObj.error_description || errorText;
+        }
+        if (errorText.toLowerCase().includes('invalid login credentials')) {
+          errorText = 'Incorrect email or password. Please check your details and try again.';
+        }
+        setError(String(errorText));
       }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Login failed. Please verify your credentials.';
-      setError(msg);
+      console.error('[AdminLogin] Error during sign in:', err);
+      let msg = 'Incorrect email or password. Please check your details and try again.';
+      if (err instanceof Error) {
+        msg = err.message;
+      } else if (typeof err === 'string') {
+        msg = err;
+      } else if (err && typeof err === 'object') {
+        const obj = err as { message?: string };
+        msg = obj.message || msg;
+      }
+      setError(String(msg));
+    } finally {
       setLoading(false);
     }
   };
@@ -58,8 +86,12 @@ export default function AdminLogin() {
           </div>
 
           {error && (
-            <div className="mb-4 rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3 text-sm text-red-400">
-              {error}
+            <div className="mb-5 flex items-start gap-2.5 rounded-xl bg-red-500/15 border border-red-500/30 px-4 py-3 text-sm text-red-300 animate-fade-in">
+              <AlertCircle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="font-semibold text-xs text-red-200">Sign In Failed</p>
+                <p className="text-xs text-red-300/90 mt-0.5">{error}</p>
+              </div>
             </div>
           )}
 

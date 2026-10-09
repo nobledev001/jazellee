@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef } from 'react';
-import { X, Upload, Trash2, Check, AlertCircle, Loader2, Image as ImageIcon } from 'lucide-react';
-import { supabase, type DbJournalArticle, uploadProductImage } from '../supabase';
+import { useState, useEffect } from 'react';
+import { X, Trash2, AlertCircle, Loader2 } from 'lucide-react';
+import { supabase, type DbJournalArticle } from '../supabase';
+import ImageUploadField from './ImageUploadField';
 
 interface ArticleModalProps {
   isOpen: boolean;
@@ -19,16 +20,12 @@ export default function ArticleModal({ isOpen, onClose, onSaved, article }: Arti
   const [excerpt, setExcerpt] = useState('');
   const [body, setBody] = useState('');
   const [imageUrl, setImageUrl] = useState('');
-  const [imageFile, setImageFile] = useState<File | null>(null);
-  const [imagePreview, setImagePreview] = useState('');
   const [isFeatured, setIsFeatured] = useState(false);
   const [isPublished, setIsPublished] = useState(true);
 
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [isDragOver, setIsDragOver] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isEditing = Boolean(article?.id || article?.slug);
 
@@ -41,8 +38,6 @@ export default function ArticleModal({ isOpen, onClose, onSaved, article }: Arti
       setExcerpt(article.excerpt || '');
       setBody(article.body || '');
       setImageUrl(article.image || '');
-      setImagePreview(article.image || '');
-      setImageFile(null);
       setIsFeatured(article.is_featured ?? false);
       setIsPublished(article.is_published ?? true);
       setError(null);
@@ -54,8 +49,6 @@ export default function ArticleModal({ isOpen, onClose, onSaved, article }: Arti
       setExcerpt('');
       setBody('');
       setImageUrl('https://images.pexels.com/photos/39459688/pexels-photo-39459688.jpeg?auto=compress&cs=tinysrgb&w=900&h=600&fit=crop');
-      setImagePreview('https://images.pexels.com/photos/39459688/pexels-photo-39459688.jpeg?auto=compress&cs=tinysrgb&w=900&h=600&fit=crop');
-      setImageFile(null);
       setIsFeatured(false);
       setIsPublished(true);
       setError(null);
@@ -73,25 +66,6 @@ export default function ArticleModal({ isOpen, onClose, onSaved, article }: Arti
     }
   };
 
-  const handleFileSelect = (file: File) => {
-    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/avif'];
-    const maxSizeBytes = 5 * 1024 * 1024; // 5 MB
-
-    if (!allowedTypes.includes(file.type.toLowerCase())) {
-      setError('Invalid file format. Please upload a JPEG, PNG, WEBP, or AVIF image.');
-      return;
-    }
-
-    if (file.size > maxSizeBytes) {
-      setError(`Image size exceeds 5MB limit (${(file.size / (1024 * 1024)).toFixed(1)}MB). Please compress the image.`);
-      return;
-    }
-
-    setError(null);
-    setImageFile(file);
-    setImagePreview(URL.createObjectURL(file));
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) {
@@ -105,14 +79,7 @@ export default function ArticleModal({ isOpen, onClose, onSaved, article }: Arti
       setSaving(true);
       setError(null);
 
-      let finalImageUrl = imageUrl.trim();
-      if (imageFile) {
-        finalImageUrl = await uploadProductImage(imageFile, 'product-images');
-      }
-
-      if (!finalImageUrl) {
-        finalImageUrl = 'https://images.pexels.com/photos/39459688/pexels-photo-39459688.jpeg?auto=compress&cs=tinysrgb&w=900&h=600&fit=crop';
-      }
+      const finalImageUrl = imageUrl.trim() || 'https://images.pexels.com/photos/39459688/pexels-photo-39459688.jpeg?auto=compress&cs=tinysrgb&w=900&h=600&fit=crop';
 
       const payload = {
         title: title.trim(),
@@ -285,73 +252,21 @@ export default function ArticleModal({ isOpen, onClose, onSaved, article }: Arti
             </div>
           </div>
 
-          {/* Image */}
+          {/* Featured Article Banner Image */}
           <div>
-            <label className="block text-xs font-semibold text-gray-700 mb-1">
-              Cover Image
-            </label>
-            <div
-              onDragOver={(e) => {
-                e.preventDefault();
-                setIsDragOver(true);
+            <ImageUploadField
+              label="Article Cover &amp; Banner Image"
+              value={imageUrl}
+              onChange={(url) => {
+                setImageUrl(url);
+                setImagePreview(url);
+                setImageFile(null);
               }}
-              onDragLeave={() => setIsDragOver(false)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setIsDragOver(false);
-                if (e.dataTransfer.files?.[0]) handleFileSelect(e.dataTransfer.files[0]);
-              }}
-              onClick={() => fileInputRef.current?.click()}
-              className={`border-2 border-dashed rounded-xl p-3 flex items-center gap-3 cursor-pointer transition-colors ${
-                isDragOver ? 'border-pink-500 bg-pink-50/50' : 'border-gray-200 hover:border-pink-300 hover:bg-gray-50/50'
-              }`}
-            >
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={(e) => {
-                  if (e.target.files?.[0]) handleFileSelect(e.target.files[0]);
-                }}
-              />
-              {imagePreview ? (
-                <img
-                  src={imagePreview}
-                  alt="Preview"
-                  className="h-14 w-14 object-cover rounded-lg border border-gray-200 shrink-0"
-                />
-              ) : (
-                <div className="h-14 w-14 rounded-lg bg-gray-100 flex items-center justify-center text-gray-400 shrink-0">
-                  <ImageIcon className="h-6 w-6" />
-                </div>
-              )}
-              <div className="flex-1 text-xs">
-                <div className="text-pink-600 font-medium flex items-center gap-1">
-                  <Upload className="h-3.5 w-3.5" /> Click or drag image to upload
-                </div>
-                <p className="text-gray-400 mt-0.5">High-quality editorial banner</p>
-                {imageFile && (
-                  <span className="text-emerald-600 font-medium mt-0.5 inline-flex items-center gap-1">
-                    <Check className="h-3 w-3" /> {imageFile.name}
-                  </span>
-                )}
-              </div>
-            </div>
-
-            <div className="mt-2 flex items-center gap-2">
-              <span className="text-xs text-gray-400">Or image URL:</span>
-              <input
-                type="url"
-                value={imageUrl}
-                onChange={(e) => {
-                  setImageUrl(e.target.value);
-                  if (!imageFile) setImagePreview(e.target.value);
-                }}
-                placeholder="https://..."
-                className="flex-1 text-xs text-gray-600 rounded-md border border-gray-200 px-2 py-1 focus:outline-none focus:border-pink-500"
-              />
-            </div>
+              bucketName="product-images"
+              aspectRatioLabel="16:9 widescreen or 4:3 (min 1200×675)"
+              helpText="Upload a high-resolution editorial photo from your device, or paste an image URL."
+              previewClassName="h-20 w-32 rounded-lg"
+            />
           </div>
 
           <div>

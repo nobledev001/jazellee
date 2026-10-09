@@ -6,7 +6,10 @@ import { supabase } from '@/lib/auth';
 import { verifyMonnifyTransactionOnServer } from '@/lib/monnify';
 import { useStore } from '@/store/StoreContext';
 import { sendOrderConfirmationEmail } from '@/lib/email';
-import { extractOrderDeliveryInfo } from '@/lib/delivery';
+import {
+  extractOrderDeliveryInfo,
+  FEZ_CHECKOUT_NOTE,
+} from '@/lib/delivery';
 
 interface OrderItem {
   slug: string;
@@ -253,7 +256,11 @@ export default function OrderConfirmationPage() {
             <div className="flex justify-between text-berry-500">
               <span>Delivery ({deliveryInfo.deliveryMethodLabel})</span>
               <span className="font-medium text-berry-700">
-                {order.delivery_fee === 0 ? 'Free' : formatNaira(order.delivery_fee)}
+                {deliveryInfo.deliveryMethod === 'fez'
+                  ? '₦0 (Paid to courier)'
+                  : order.delivery_fee === 0
+                  ? 'Free'
+                  : formatNaira(order.delivery_fee)}
               </span>
             </div>
             <div className="border-t border-blush-100 pt-2 flex justify-between text-base font-bold text-berry-800">
@@ -270,6 +277,11 @@ export default function OrderConfirmationPage() {
               <Truck className="h-3.5 w-3.5" />
               <span>{deliveryInfo.fulfillmentSummary}</span>
             </p>
+            {deliveryInfo.deliveryMethod === 'fez' && (
+              <div className="rounded-2xl bg-blush-50/70 p-3 text-xs text-berry-700 border border-blush-100">
+                {FEZ_CHECKOUT_NOTE}
+              </div>
+            )}
             <p className="font-medium text-berry-700 pt-1">{order.customer_name}</p>
             {deliveryInfo.deliveryMethod === 'motor_park' &&
               (deliveryInfo.deliveryDetails.park_name || deliveryInfo.deliveryDetails.park_location) && (

@@ -1,12 +1,11 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Package, CheckCircle2, Truck, Home, Search, Clock, ExternalLink, Bus, Copy, Check } from 'lucide-react';
+import { Package, CheckCircle2, Truck, Home, Search, Clock, Bus, Copy, Check } from 'lucide-react';
 import { formatNaira } from '@/lib/format';
 import { useRouter } from '@/router';
 import { supabase } from '@/lib/auth';
 import {
   extractOrderDeliveryInfo,
-  FEZ_TRACKING_URL,
-  JUMIA_TRACKING_URL,
+  FEZ_CHECKOUT_NOTE,
 } from '@/lib/delivery';
 
 type Status = 'placed' | 'processing' | 'shipped' | 'delivered';
@@ -192,7 +191,7 @@ export default function TrackOrderPage() {
                   )}
                   <span>{deliveryInfo.fulfillmentSummary}</span>
                 </span>
-                {deliveryInfo.trackingNumber && (
+                {deliveryInfo.deliveryMethod === 'motor_park' && deliveryInfo.trackingNumber && (
                   <span className="font-mono font-bold text-berry-800 bg-sage-50 border border-sage-200 px-3 py-1 rounded-full">
                     Waybill / Tracking: {deliveryInfo.trackingNumber}
                   </span>
@@ -200,13 +199,25 @@ export default function TrackOrderPage() {
               </div>
             </div>
 
-            {/* Delivery Tracking & Waybill Card */}
-            {(deliveryInfo.trackingNumber || deliveryInfo.deliveryMethod === 'motor_park') && (
+            {/* External Courier Notice for Fez */}
+            {deliveryInfo.deliveryMethod === 'fez' && (
+              <div className="mt-4 rounded-4xl bg-white p-6 shadow-soft sm:p-8 border border-blush-100">
+                <span className="inline-block rounded-full bg-blush-100 px-3 py-0.5 text-[11px] font-bold uppercase tracking-wider text-blush-700">
+                  {deliveryInfo.fulfillmentSummary}
+                </span>
+                <p className="mt-2 text-sm text-berry-600 leading-relaxed">
+                  {FEZ_CHECKOUT_NOTE}
+                </p>
+              </div>
+            )}
+
+            {/* Motor Park Delivery Tracking & Waybill Card */}
+            {deliveryInfo.deliveryMethod === 'motor_park' && (
               <div className="mt-4 rounded-4xl bg-white p-6 shadow-soft sm:p-8 border-2 border-blush-200">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <span className="inline-block rounded-full bg-blush-100 px-3 py-0.5 text-[11px] font-bold uppercase tracking-wider text-blush-700">
-                      Delivery &amp; Tracking Details
+                      Motor Park / Bus Pickup Details
                     </span>
                     <h2 className="mt-1.5 font-display text-lg font-medium text-berry-800">
                       Your order is on its way via {deliveryInfo.deliveryMethodLabel}
@@ -244,65 +255,27 @@ export default function TrackOrderPage() {
                   </div>
                 )}
 
-                {deliveryInfo.deliveryMethod === 'jumia' && deliveryInfo.trackingNumber && (
-                  <div className="mt-4 space-y-3 text-sm text-berry-600">
+                <div className="mt-4 space-y-2 text-sm text-berry-600">
+                  <p>
+                    Motor Park / Bus Pickup orders are dispatched directly via interstate bus waybill rather than online courier tracking. Please use the pickup details below when collecting your package at the park:
+                  </p>
+                  <div className="rounded-2xl bg-blush-50/50 p-4 border border-blush-100 text-xs text-berry-800 space-y-1.5">
                     <p>
-                      Open Jumia&apos;s package tracking page below and enter your tracking number{' '}
-                      <strong className="font-mono text-berry-800">{deliveryInfo.trackingNumber}</strong> to view live delivery updates:
+                      <strong>Park / Bus Company Name:</strong>{' '}
+                      {deliveryInfo.deliveryDetails.park_name || 'Specified at checkout'}
                     </p>
-                    <a
-                      href={JUMIA_TRACKING_URL}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="btn-primary inline-flex items-center gap-2 text-xs"
-                    >
-                      <span>Track on Jumia Delivery</span>
-                      <ExternalLink className="h-3.5 w-3.5" />
-                    </a>
-                  </div>
-                )}
-
-                {deliveryInfo.deliveryMethod === 'fez' && deliveryInfo.trackingNumber && (
-                  <div className="mt-4 space-y-3 text-sm text-berry-600">
                     <p>
-                      Open Fez Delivery&apos;s tracking page below and enter your tracking number{' '}
-                      <strong className="font-mono text-berry-800">{deliveryInfo.trackingNumber}</strong> to monitor your shipment in real time:
+                      <strong>Destination City / Park Location:</strong>{' '}
+                      {deliveryInfo.deliveryDetails.park_location || `${order.delivery_lga}, ${order.delivery_state}`}
                     </p>
-                    <a
-                      href={FEZ_TRACKING_URL}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="btn-primary inline-flex items-center gap-2 text-xs"
-                    >
-                      <span>Track on Fez Delivery</span>
-                      <ExternalLink className="h-3.5 w-3.5" />
-                    </a>
-                  </div>
-                )}
-
-                {deliveryInfo.deliveryMethod === 'motor_park' && (
-                  <div className="mt-4 space-y-2 text-sm text-berry-600">
-                    <p>
-                      Motor Park / Bus Pickup orders are dispatched directly via interstate bus waybill rather than online courier tracking. Please use the pickup details below when collecting your package at the park:
-                    </p>
-                    <div className="rounded-2xl bg-blush-50/50 p-4 border border-blush-100 text-xs text-berry-800 space-y-1.5">
+                    {deliveryInfo.trackingNumber && (
                       <p>
-                        <strong>Park / Bus Company Name:</strong>{' '}
-                        {deliveryInfo.deliveryDetails.park_name || 'Specified at checkout'}
+                        <strong>Waybill / Driver Reference:</strong>{' '}
+                        <span className="font-mono font-bold">{deliveryInfo.trackingNumber}</span>
                       </p>
-                      <p>
-                        <strong>Destination City / Park Location:</strong>{' '}
-                        {deliveryInfo.deliveryDetails.park_location || `${order.delivery_lga}, ${order.delivery_state}`}
-                      </p>
-                      {deliveryInfo.trackingNumber && (
-                        <p>
-                          <strong>Waybill / Driver Reference:</strong>{' '}
-                          <span className="font-mono font-bold">{deliveryInfo.trackingNumber}</span>
-                        </p>
-                      )}
-                    </div>
+                    )}
                   </div>
-                )}
+                </div>
               </div>
             )}
 

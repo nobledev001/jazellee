@@ -1,8 +1,7 @@
 import { supabase } from './supabaseClient';
 import { formatNaira } from './format';
 import {
-  FEZ_TRACKING_URL,
-  JUMIA_TRACKING_URL,
+  FEZ_CHECKOUT_NOTE,
   getDeliveryMethodLabel,
   normalizeDeliveryMethodId,
   type DeliveryMethodDetails,
@@ -31,6 +30,7 @@ export interface SendEmailPayload {
 }
 
 export interface SendEmailResult {
+  ok?: boolean;
   success: boolean;
   messageId?: string;
   simulated?: boolean;
@@ -66,16 +66,17 @@ export async function sendTransactionalEmail(payload: SendEmailPayload): Promise
     if (response.ok) {
       const data = await response.json();
       result = {
+        ok: true,
         success: true,
         messageId: data.id || `msg_${Date.now()}`,
         simulated: Boolean(data.simulated),
       };
     } else {
-      result = { success: true, simulated: true, messageId: `local_${Date.now()}` };
+      result = { ok: true, success: true, simulated: true, messageId: `local_${Date.now()}` };
     }
   } catch (err) {
     console.warn('[Email] Backend email dispatch fallback:', err);
-    result = { success: true, simulated: true, messageId: `fallback_${Date.now()}` };
+    result = { ok: true, success: true, simulated: true, messageId: `fallback_${Date.now()}` };
   }
 
   // 2. Log email to Supabase for audit & admin traceability
@@ -224,7 +225,18 @@ export async function sendOrderConfirmationEmail(order: OrderEmailData) {
            <strong>Park / Bus Company:</strong> ${parkName || 'N/A'}<br/>
            <strong>Destination City / Park Location:</strong> ${parkLocation || 'N/A'}
          </div>`
+      : methodId === 'fez'
+      ? `<div style="margin-top: 8px; padding-top: 8px; border-top: 1px dashed #F5BCD5; font-size: 13px; color: #760536;">
+           ${FEZ_CHECKOUT_NOTE}
+         </div>`
       : '';
+
+  const deliveryFeeDisplay =
+    methodId === 'fez'
+      ? '₦0 (Paid to courier)'
+      : order.delivery_fee === 0
+      ? 'FREE'
+      : formatNaira(order.delivery_fee);
 
   const origin =
     typeof window !== 'undefined' && window.location.origin
@@ -250,7 +262,7 @@ export async function sendOrderConfirmationEmail(order: OrderEmailData) {
           </div>
           <div style="display: table; width: 100%; margin-bottom: 6px;">
             <div style="display: table-cell;">Delivery (${methodLabel})</div>
-            <div style="display: table-cell; text-align: right;">${order.delivery_fee === 0 ? 'FREE' : formatNaira(order.delivery_fee)}</div>
+            <div style="display: table-cell; text-align: right;">${deliveryFeeDisplay}</div>
           </div>
           <div style="display: table; width: 100%; padding-top: 6px; border-top: 1px solid #F5BCD5; font-size: 16px; font-weight: 700; color: #A20B4C;">
             <div style="display: table-cell;">Total Paid</div>
@@ -297,16 +309,23 @@ export interface OrderTrackingEmailData {
   delivery_method: DeliveryMethodId | string;
   delivery_method_details?: DeliveryMethodDetails | null;
   tracking_number: string;
+  delivery_address?: string;
+  delivery_state?: string;
+  delivery_lga?: string;
   items: OrderEmailItem[];
   total?: number;
 }
 
 /**
  * Automatically sends a tracking / waybill notification email via Resend
- * when admin adds or updates the tracking number on an order.
+ * when admin adds or updates the tracking number on a Motor Park order.
+ * Do NOT send any tracking/delivery email from this site for Fez orders (handled by courier directly).
  */
 export async function sendOrderTrackingEmail(order: OrderTrackingEmailData) {
   const methodId = normalizeDeliveryMethodId(order.delivery_method);
+  if (methodId === 'fez') {
+    return { ok: true, id: `skipped_${methodId}_${Date.now()}` };
+  }
   const methodLabel = getDeliveryMethodLabel(methodId);
   const trackingNumber = order.tracking_number.trim();
   const parkName = order.delivery_method_details?.park_name || 'your selected bus company';
@@ -337,37 +356,7 @@ export async function sendOrderTrackingEmail(order: OrderTrackingEmailData) {
   let methodTrackingInstructionsHtml = '';
   let plainTextInstructions = '';
 
-  if (methodId === 'jumia') {
-    methodTrackingInstructionsHtml = `
-      <div class="box" style="background: #FFF9FB; border: 1.5px solid #F25A9B;">
-        <h3 style="margin: 0 0 8px 0; font-size: 15px; color: #760536;">How to Track via Jumia Delivery</h3>
-        <p style="margin: 0 0 14px 0; font-size: 13px; color: #A20B4C; line-height: 1.6;">
-          Click the button below to open Jumia's tracking page, then enter your tracking number <strong>${trackingNumber}</strong> to view live delivery updates:
-        </p>
-        <div style="margin: 12px 0;">
-          <a href="${JUMIA_TRACKING_URL}" style="display: inline-block; background-color: #760536; color: #ffffff !important; text-decoration: none; padding: 12px 24px; border-radius: 9999px; font-weight: 600; font-size: 13px;">
-            Track on Jumia Delivery (${JUMIA_TRACKING_URL}) &rarr;
-          </a>
-        </div>
-      </div>
-    `;
-    plainTextInstructions = `Track on Jumia Delivery: Visit ${JUMIA_TRACKING_URL} and enter your tracking number: ${trackingNumber}`;
-  } else if (methodId === 'fez') {
-    methodTrackingInstructionsHtml = `
-      <div class="box" style="background: #FFF9FB; border: 1.5px solid #F25A9B;">
-        <h3 style="margin: 0 0 8px 0; font-size: 15px; color: #760536;">How to Track via Fez Delivery</h3>
-        <p style="margin: 0 0 14px 0; font-size: 13px; color: #A20B4C; line-height: 1.6;">
-          Click the button below to open Fez Delivery's tracking page, then enter your tracking number <strong>${trackingNumber}</strong> to follow your shipment in real time:
-        </p>
-        <div style="margin: 12px 0;">
-          <a href="${FEZ_TRACKING_URL}" style="display: inline-block; background-color: #760536; color: #ffffff !important; text-decoration: none; padding: 12px 24px; border-radius: 9999px; font-weight: 600; font-size: 13px;">
-            Track on Fez Delivery (${FEZ_TRACKING_URL}) &rarr;
-          </a>
-        </div>
-      </div>
-    `;
-    plainTextInstructions = `Track on Fez Delivery: Visit ${FEZ_TRACKING_URL} and enter your tracking number: ${trackingNumber}`;
-  } else if (methodId === 'motor_park') {
+  if (methodId === 'motor_park') {
     methodTrackingInstructionsHtml = `
       <div class="box" style="background: #FFF9FB; border: 1.5px solid #F25A9B;">
         <h3 style="margin: 0 0 8px 0; font-size: 15px; color: #760536;">Motor Park / Bus Pickup Instructions</h3>

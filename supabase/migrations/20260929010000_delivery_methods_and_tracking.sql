@@ -11,8 +11,7 @@ ALTER TABLE public.orders
 -- 2. Seed default delivery method fees in public.site_settings (without overwriting customized values)
 INSERT INTO public.site_settings (key, value) VALUES
   ('delivery_fee_motor_park', '2000'),
-  ('delivery_fee_jumia', '3000'),
-  ('delivery_fee_fez', '2500'),
+  ('delivery_fee_fez', '0'),
   ('standard_delivery_fee', '3500')
 ON CONFLICT (key) DO NOTHING;
 

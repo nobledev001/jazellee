@@ -199,8 +199,9 @@ export const AdminAuthProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       });
 
       if (error || !data.session || !data.user) {
+        const msg = error?.message || 'Invalid login credentials. Access denied.';
         return {
-          error: new Error(error?.message || 'Invalid login credentials. Access denied.'),
+          error: new Error(msg),
         };
       }
 

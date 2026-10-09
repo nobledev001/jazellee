@@ -14,7 +14,6 @@ import {
   Truck,
   Bus,
   Send,
-  ExternalLink,
 } from 'lucide-react';
 import { supabase, type DbOrder } from '../supabase';
 import { sendShippingUpdateEmail, sendOrderTrackingEmail } from '@/lib/email';
@@ -23,8 +22,6 @@ import {
   formatAdminDeliverySummary,
   getDeliveryMethodLabel,
   encodeDeliveryMetadataInLandmark,
-  FEZ_TRACKING_URL,
-  JUMIA_TRACKING_URL,
   type DeliveryMethodId,
 } from '@/lib/delivery';
 
@@ -140,17 +137,23 @@ export default function AdminOrders() {
     }).eq('id', orderId);
 
     // Send transactional shipping update email if customer email exists
+    // Do NOT send any tracking/delivery email from this site for Fez orders
     if (targetOrder && targetOrder.customer_email && nextStatus !== 'pending') {
-      try {
-        await sendShippingUpdateEmail({
-          order_number: targetOrder.order_number,
-          customer_name: targetOrder.customer_name,
-          customer_email: targetOrder.customer_email,
-          status: nextStatus,
-          delivery_state: targetOrder.delivery_state,
-        });
-      } catch (emailErr) {
-        console.warn('[AdminOrders] Shipping update email failed to dispatch:', emailErr);
+      const deliveryInfo = extractOrderDeliveryInfo(
+        targetOrder as unknown as Record<string, unknown>
+      );
+      if (deliveryInfo.deliveryMethod !== 'fez') {
+        try {
+          await sendShippingUpdateEmail({
+            order_number: targetOrder.order_number,
+            customer_name: targetOrder.customer_name,
+            customer_email: targetOrder.customer_email,
+            status: nextStatus,
+            delivery_state: targetOrder.delivery_state,
+          });
+        } catch (emailErr) {
+          console.warn('[AdminOrders] Shipping update email failed to dispatch:', emailErr);
+        }
       }
     }
 
@@ -244,9 +247,9 @@ export default function AdminOrders() {
         if (fallbackErr) throw fallbackErr;
       }
 
-      // Automatically trigger tracking email to customer via Resend
+      // Automatically trigger tracking email to customer via Resend (only for Motor Park orders)
       let emailDispatched = false;
-      if (selectedOrder.customer_email) {
+      if (selectedOrder.customer_email && effectiveMethod === 'motor_park') {
         const emailRes = await sendOrderTrackingEmail({
           order_number: selectedOrder.order_number,
           customer_name: selectedOrder.customer_name,
@@ -935,9 +938,11 @@ export default function AdminOrders() {
               const orderDeliveryInfo = extractOrderDeliveryInfo(
                 selectedOrder as unknown as Record<string, unknown>
               );
+              const activeMethod = modalDeliveryMethod || orderDeliveryInfo.deliveryMethod;
+              const isExternalCourier = activeMethod === 'fez';
               const deliverViaSummary = formatAdminDeliverySummary(
-                modalDeliveryMethod || orderDeliveryInfo.deliveryMethod,
-                modalDeliveryMethod === 'motor_park'
+                activeMethod,
+                activeMethod === 'motor_park'
                   ? {
                       park_name:
                         modalParkName || orderDeliveryInfo.deliveryMethodDetails?.park_name,
@@ -947,10 +952,6 @@ export default function AdminOrders() {
                     }
                   : orderDeliveryInfo.deliveryMethodDetails
               );
-              const isTrackableCarrier =
-                modalDeliveryMethod === 'jumia' ||
-                modalDeliveryMethod === 'fez' ||
-                modalDeliveryMethod === 'motor_park';
 
               return (
                 <>
@@ -959,19 +960,28 @@ export default function AdminOrders() {
                       Customer &amp; Delivery Fulfillment
                     </h4>
 
-                    {/* Highlighted Deliver Via Banner */}
+                    {/* Highlighted Delivery Method Banner */}
                     <div className="rounded-xl border border-pink-200 bg-pink-50/70 p-3.5">
                       <div className="flex items-start gap-2.5">
-                        {modalDeliveryMethod === 'motor_park' ? (
+                        {activeMethod === 'motor_park' ? (
                           <Bus className="h-4 w-4 text-pink-700 shrink-0 mt-0.5" />
                         ) : (
                           <Truck className="h-4 w-4 text-pink-700 shrink-0 mt-0.5" />
                         )}
                         <div className="min-w-0 flex-1">
                           <div className="text-xs font-bold uppercase tracking-wider text-pink-900">
-                            Deliver via: {deliverViaSummary}
+                            {isExternalCourier
+                              ? deliverViaSummary
+                              : `Deliver via: ${deliverViaSummary}`}
                           </div>
-                          {modalDeliveryMethod === 'motor_park' && (
+                          {isExternalCourier && (
+                            <p className="mt-1 text-xs text-pink-800">
+                              Hand package off to{' '}
+                              <span className="font-semibold">Fez Delivery</span>{' '}
+                              using the customer&apos;s delivery address below. Delivery fee and customer tracking communication are handled directly by the courier.
+                            </p>
+                          )}
+                          {activeMethod === 'motor_park' && (
                             <div className="mt-1.5 text-xs text-pink-800 space-y-0.5">
                               {modalParkName && (
                                 <div>
@@ -985,6 +995,10 @@ export default function AdminOrders() {
                                   {modalParkLocation}
                                 </div>
                               )}
+                              <div>
+                                <span className="font-semibold">Motor Park Delivery Fee:</span>{' '}
+                                ₦{(selectedOrder.delivery_fee || 0).toLocaleString()}
+                              </div>
                             </div>
                           )}
                         </div>
@@ -997,7 +1011,7 @@ export default function AdminOrders() {
                       </p>
                       <p className="text-gray-500 break-all">{selectedOrder.customer_email}</p>
                       <p className="text-gray-700 pt-1">
-                        <span className="font-semibold text-gray-500">Address:</span>{' '}
+                        <span className="font-semibold text-gray-500">Delivery Address:</span>{' '}
                         {selectedOrder.delivery_address}, {selectedOrder.delivery_lga},{' '}
                         {selectedOrder.delivery_state}
                       </p>
@@ -1009,32 +1023,19 @@ export default function AdminOrders() {
                     </div>
                   </div>
 
-                  {/* Tracking Number / Waybill Section (Relevant for Jumia, Fez, and Motor Park deliveries) */}
-                  <div className="rounded-xl border border-gray-200 bg-white p-4 space-y-3 shadow-2xs">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  {/* Tracking Number / Waybill Section — Shown ONLY for Motor Park orders (no price or tracking fields for Fez) */}
+                  {activeMethod === 'motor_park' && (
+                    <div className="rounded-xl border border-gray-200 bg-white p-4 space-y-3 shadow-2xs">
                       <div>
                         <h4 className="text-xs font-bold uppercase tracking-wider text-gray-800 flex items-center gap-1.5">
-                          <Truck className="h-3.5 w-3.5 text-pink-600" />
-                          <span>Dispatch &amp; Tracking / Waybill</span>
+                          <Bus className="h-3.5 w-3.5 text-pink-600" />
+                          <span>Motor Park Dispatch &amp; Waybill Tracking</span>
                         </h4>
                         <p className="text-[11px] text-gray-500 mt-0.5">
-                          Adding or updating a tracking number automatically emails the customer with carrier tracking instructions.
+                          Add or update the bus waybill/pickup details after booking. The customer will be automatically emailed with these pickup instructions.
                         </p>
                       </div>
-                      <select
-                        value={modalDeliveryMethod}
-                        onChange={(e) => setModalDeliveryMethod(e.target.value as DeliveryMethodId)}
-                        className="rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-1.5 text-xs font-medium text-gray-700 focus:outline-none focus:border-pink-500"
-                        title="Delivery Method"
-                      >
-                        <option value="motor_park">Motor Park / Bus Pickup</option>
-                        <option value="jumia">Jumia Delivery</option>
-                        <option value="fez">Fez Delivery</option>
-                        <option value="standard">Standard Doorstep Delivery</option>
-                      </select>
-                    </div>
 
-                    {modalDeliveryMethod === 'motor_park' && (
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
                         <div>
                           <label className="block text-[11px] font-semibold text-gray-600 mb-1">
@@ -1056,31 +1057,23 @@ export default function AdminOrders() {
                             type="text"
                             value={modalParkLocation}
                             onChange={(e) => setModalParkLocation(e.target.value)}
-                            placeholder="e.g. Utako Park, Abuja"
+                            placeholder="e.g. Sabon Gari Park, Kano"
                             className="w-full rounded-lg border border-gray-200 px-3 py-1.5 text-xs focus:outline-none focus:border-pink-500"
                           />
                         </div>
                       </div>
-                    )}
 
-                    {isTrackableCarrier ? (
                       <form onSubmit={handleSaveTrackingNumber} className="space-y-2.5 pt-1">
                         <div>
                           <label className="block text-xs font-semibold text-gray-700 mb-1">
-                            Tracking Number / Waybill ({getDeliveryMethodLabel(modalDeliveryMethod)})
+                            Tracking Number / Waybill (Motor Park / Bus Pickup)
                           </label>
                           <div className="flex flex-col sm:flex-row gap-2">
                             <input
                               type="text"
                               value={trackingInput}
                               onChange={(e) => setTrackingInput(e.target.value)}
-                              placeholder={
-                                modalDeliveryMethod === 'motor_park'
-                                  ? 'Enter bus waybill / driver phone / tag number…'
-                                  : modalDeliveryMethod === 'jumia'
-                                  ? 'Enter Jumia package tracking number…'
-                                  : 'Enter Fez Delivery waybill / tracking number…'
-                              }
+                              placeholder="Enter bus waybill / driver phone / tag number…"
                               className="flex-1 rounded-lg border border-gray-200 px-3 py-2 text-xs font-mono focus:outline-none focus:border-pink-500"
                             />
                             <button
@@ -1100,49 +1093,17 @@ export default function AdminOrders() {
                           </div>
                         </div>
 
-                        {modalDeliveryMethod === 'jumia' && (
-                          <div className="flex items-center justify-between text-[11px] text-gray-500 bg-gray-50 px-3 py-1.5 rounded-lg">
-                            <span>Customer will receive Jumia tracking link:</span>
-                            <a
-                              href={JUMIA_TRACKING_URL}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1 text-pink-600 font-semibold hover:underline"
-                            >
-                              <span>jumia.com.ng/tracking</span>
-                              <ExternalLink className="h-3 w-3" />
-                            </a>
-                          </div>
-                        )}
-
-                        {modalDeliveryMethod === 'fez' && (
-                          <div className="flex items-center justify-between text-[11px] text-gray-500 bg-gray-50 px-3 py-1.5 rounded-lg">
-                            <span>Customer will receive Fez tracking link:</span>
-                            <a
-                              href={FEZ_TRACKING_URL}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1 text-pink-600 font-semibold hover:underline"
-                            >
-                              <span>fezdelivery.co/track</span>
-                              <ExternalLink className="h-3 w-3" />
-                            </a>
-                          </div>
-                        )}
-
-                        {modalDeliveryMethod === 'motor_park' && (
-                          <div className="text-[11px] text-gray-500 bg-gray-50 px-3 py-1.5 rounded-lg">
-                            Customer will receive waybill number &amp; pickup instructions for{' '}
-                            <span className="font-semibold text-gray-700">
-                              {modalParkName || 'the selected bus company'}
-                            </span>{' '}
-                            at{' '}
-                            <span className="font-semibold text-gray-700">
-                              {modalParkLocation || 'the destination park'}
-                            </span>
-                            .
-                          </div>
-                        )}
+                        <div className="text-[11px] text-gray-500 bg-gray-50 px-3 py-1.5 rounded-lg">
+                          Customer will receive waybill number &amp; pickup instructions for{' '}
+                          <span className="font-semibold text-gray-700">
+                            {modalParkName || 'the selected bus company'}
+                          </span>{' '}
+                          at{' '}
+                          <span className="font-semibold text-gray-700">
+                            {modalParkLocation || 'the destination park'}
+                          </span>
+                          .
+                        </div>
 
                         {trackingFeedback && (
                           <div
@@ -1156,15 +1117,8 @@ export default function AdminOrders() {
                           </div>
                         )}
                       </form>
-                    ) : (
-                      <p className="text-xs text-gray-500 bg-gray-50 rounded-lg p-3">
-                        This order uses <span className="font-semibold text-gray-700">Standard Doorstep Delivery</span>. Tracking numbers / waybills apply to{' '}
-                        <span className="font-medium">Jumia Delivery</span>,{' '}
-                        <span className="font-medium">Fez Delivery</span>, and{' '}
-                        <span className="font-medium">Motor Park / Bus Pickup</span> orders. (You can switch the delivery method dropdown above if dispatching via one of those carriers.)
-                      </p>
-                    )}
-                  </div>
+                    </div>
+                  )}
                 </>
               );
             })()}
@@ -1188,22 +1142,36 @@ export default function AdminOrders() {
             </div>
 
             <div className="border-t pt-3 space-y-1.5 text-sm">
-              {selectedOrder.discount_amount && selectedOrder.discount_amount > 0 ? (
-                <>
-                  <div className="flex items-center justify-between text-xs text-gray-500">
-                    <span>Subtotal</span>
-                    <span>₦{(selectedOrder.subtotal || 0).toLocaleString()}</span>
-                  </div>
-                  <div className="flex items-center justify-between text-xs text-emerald-700 font-medium">
-                    <span>Promo Discount {selectedOrder.coupon_code ? `(${selectedOrder.coupon_code})` : ''}</span>
-                    <span>-₦{selectedOrder.discount_amount.toLocaleString()}</span>
-                  </div>
-                  <div className="flex items-center justify-between text-xs text-gray-500">
-                    <span>Delivery Fee</span>
-                    <span>{(selectedOrder.delivery_fee || 0) === 0 ? 'Free' : `₦${(selectedOrder.delivery_fee || 0).toLocaleString()}`}</span>
-                  </div>
-                </>
-              ) : null}
+              {(() => {
+                const orderDeliveryInfo = extractOrderDeliveryInfo(
+                  selectedOrder as unknown as Record<string, unknown>
+                );
+                const isExternalCourier =
+                  orderDeliveryInfo.deliveryMethod === 'fez';
+
+                return selectedOrder.discount_amount && selectedOrder.discount_amount > 0 ? (
+                  <>
+                    <div className="flex items-center justify-between text-xs text-gray-500">
+                      <span>Subtotal</span>
+                      <span>₦{(selectedOrder.subtotal || 0).toLocaleString()}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-xs text-emerald-700 font-medium">
+                      <span>Promo Discount {selectedOrder.coupon_code ? `(${selectedOrder.coupon_code})` : ''}</span>
+                      <span>-₦{selectedOrder.discount_amount.toLocaleString()}</span>
+                    </div>
+                    {!isExternalCourier && (
+                      <div className="flex items-center justify-between text-xs text-gray-500">
+                        <span>Delivery Fee</span>
+                        <span>
+                          {(selectedOrder.delivery_fee || 0) === 0
+                            ? 'Free'
+                            : `₦${(selectedOrder.delivery_fee || 0).toLocaleString()}`}
+                        </span>
+                      </div>
+                    )}
+                  </>
+                ) : null;
+              })()}
               <div className="flex items-center justify-between pt-1">
                 <span className="text-gray-500">Total ({selectedOrder.payment_method})</span>
                 <span className="text-lg font-bold text-gray-900">₦{selectedOrder.total.toLocaleString()}</span>

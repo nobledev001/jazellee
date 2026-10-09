@@ -385,7 +385,7 @@ async function startServer() {
     }
 
     const settingsResp = await fetch(
-      `${supabaseUrl}/rest/v1/site_settings?key=in.(free_delivery_threshold,standard_delivery_fee,delivery_fee_motor_park,delivery_fee_jumia,delivery_fee_fez)&select=key,value`,
+      `${supabaseUrl}/rest/v1/site_settings?key=in.(free_delivery_threshold,standard_delivery_fee,delivery_fee_motor_park,delivery_fee_fez)&select=key,value`,
       {
         headers: {
           apikey: supabaseKey,

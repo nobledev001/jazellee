@@ -46,6 +46,7 @@ export default function Hero() {
   const [currentSlide, setCurrentSlide] = useState(0);
   const { getSetting } = useSiteSettings();
 
+  const customHeroImage = getSetting('hero_banner_image', '').trim();
   const heroBadge = getSetting('hero_badge', 'Now delivering across Nigeria').replace(/[✨⭐🌟💫]/gu, '').trim();
   const heroHeadline = getSetting('hero_headline', 'Your little self-care haven');
   const heroSubtitle = getSetting(
@@ -89,28 +90,39 @@ export default function Hero() {
       className="relative w-full min-h-[580px] sm:min-h-[640px] lg:min-h-[700px] flex items-center overflow-hidden bg-berry-950"
       aria-label="Hero Showcase"
     >
-      {/* Background Slideshow with Smooth Cross-Fade */}
+      {/* Background Slideshow with Smooth Cross-Fade or Custom Admin Hero Image */}
       <div className="absolute inset-0 w-full h-full overflow-hidden select-none">
-        {HERO_SLIDES.map((slide, index) => {
-          const isActive = index === currentSlide;
-          return (
-            <div
-              key={index}
-              className={`absolute inset-0 w-full h-full transition-opacity duration-1000 ease-in-out ${
-                isActive ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'
-              }`}
-            >
-              <img
-                src={slide.image}
-                alt={slide.alt}
-                className={`w-full h-full object-cover object-center transition-transform duration-[5500ms] ease-out ${
-                  isActive ? 'scale-105' : 'scale-100'
+        {customHeroImage ? (
+          <div className="absolute inset-0 w-full h-full opacity-100 z-10">
+            <img
+              src={customHeroImage}
+              alt="Jazelle Skin Haven Hero Banner"
+              className="w-full h-full object-cover object-center scale-100"
+              loading="eager"
+            />
+          </div>
+        ) : (
+          HERO_SLIDES.map((slide, index) => {
+            const isActive = index === currentSlide;
+            return (
+              <div
+                key={index}
+                className={`absolute inset-0 w-full h-full transition-opacity duration-1000 ease-in-out ${
+                  isActive ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'
                 }`}
-                loading={index === 0 ? 'eager' : 'lazy'}
-              />
-            </div>
-          );
-        })}
+              >
+                <img
+                  src={slide.image}
+                  alt={slide.alt}
+                  className={`w-full h-full object-cover object-center transition-transform duration-[5500ms] ease-out ${
+                    isActive ? 'scale-105' : 'scale-100'
+                  }`}
+                  loading={index === 0 ? 'eager' : 'lazy'}
+                />
+              </div>
+            );
+          })
+        )}
       </div>
 
       {/* Layer 1: Contrast Protection - Directional Gradient from Left/Center for Text Readability */}
@@ -191,29 +203,31 @@ export default function Hero() {
         </div>
       </div>
 
-      {/* Small Dot Indicators (Auto-rotation visual cue + clickable) */}
-      <div
-        className="absolute bottom-6 sm:bottom-8 left-0 right-0 z-20 flex justify-center items-center gap-2 sm:gap-2.5"
-        role="tablist"
-        aria-label="Slideshow indicators"
-      >
-        {HERO_SLIDES.map((slide, idx) => {
-          const isActive = idx === currentSlide;
-          return (
-            <button
-              key={idx}
-              type="button"
-              onClick={() => setCurrentSlide(idx)}
-              aria-label={`Go to slide ${idx + 1}: ${slide.tagline || slide.alt}`}
-              className={`transition-all duration-500 rounded-full cursor-pointer focus:outline-hidden focus:ring-2 focus:ring-blush-300 ${
-                isActive
-                  ? 'w-7 sm:w-8 h-2 sm:h-2.5 bg-blush-400 shadow-md ring-1 ring-white/50'
-                  : 'w-2 sm:w-2.5 h-2 sm:h-2.5 bg-white/40 hover:bg-white/75'
-              }`}
-            />
-          );
-        })}
-      </div>
+      {/* Small Dot Indicators (Auto-rotation visual cue + clickable) — hidden if static custom admin image is active */}
+      {!customHeroImage && (
+        <div
+          className="absolute bottom-6 sm:bottom-8 left-0 right-0 z-20 flex justify-center items-center gap-2 sm:gap-2.5"
+          role="tablist"
+          aria-label="Slideshow indicators"
+        >
+          {HERO_SLIDES.map((slide, idx) => {
+            const isActive = idx === currentSlide;
+            return (
+              <button
+                key={idx}
+                type="button"
+                onClick={() => setCurrentSlide(idx)}
+                aria-label={`Go to slide ${idx + 1}: ${slide.tagline || slide.alt}`}
+                className={`transition-all duration-500 rounded-full cursor-pointer focus:outline-hidden focus:ring-2 focus:ring-blush-300 ${
+                  isActive
+                    ? 'w-7 sm:w-8 h-2 sm:h-2.5 bg-blush-400 shadow-md ring-1 ring-white/50'
+                    : 'w-2 sm:w-2.5 h-2 sm:h-2.5 bg-white/40 hover:bg-white/75'
+                }`}
+              />
+            );
+          })}
+        </div>
+      )}
     </section>
   );
 }

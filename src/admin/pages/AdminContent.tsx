@@ -22,6 +22,7 @@ import { supabase, type DbJournalArticle, type DbFaqSection, type DbFaqItem } fr
 import ArticleModal from '../components/ArticleModal';
 import FaqItemModal from '../components/FaqItemModal';
 import FaqSectionModal from '../components/FaqSectionModal';
+import ImageUploadField from '../components/ImageUploadField';
 import { DEFAULT_SITE_SETTINGS } from '@/hooks/useSiteSettings';
 
 export default function AdminContent() {
@@ -450,6 +451,18 @@ export default function AdminContent() {
                       />
                     </div>
 
+                    <div>
+                      <ImageUploadField
+                        label="Hero Showcase Banner Image"
+                        value={settings.hero_banner_image || ''}
+                        onChange={(url) => handleSettingChange('hero_banner_image', url)}
+                        bucketName="site-assets"
+                        aspectRatioLabel="Recommended 16:9 or 21:9 landscape (min 1920×1080)"
+                        helpText="Upload an image from your device to display as the storefront hero banner."
+                        previewClassName="h-28 w-44"
+                      />
+                    </div>
+
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div>
                         <label className="block text-xs font-semibold text-gray-700 mb-1">
@@ -693,29 +706,15 @@ export default function AdminContent() {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-gray-700 mb-1">
-                      Founder Photo URL
-                    </label>
-                    <input
-                      type="url"
+                    <ImageUploadField
+                      label="Founder Photo"
                       value={settings.founder_image_url || ''}
-                      onChange={(e) => handleSettingChange('founder_image_url', e.target.value)}
-                      placeholder="https://..."
-                      className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:border-pink-500 font-mono text-xs"
+                      onChange={(url) => handleSettingChange('founder_image_url', url)}
+                      bucketName="site-assets"
+                      aspectRatioLabel="Square or 4:5 portrait (min 800×800)"
+                      helpText="Upload a warm, authentic photo of Jazelle displayed on the /about story page."
+                      previewClassName="h-24 w-24 rounded-full"
                     />
-                    {settings.founder_image_url && (
-                      <div className="mt-2 flex items-center gap-3">
-                        <img
-                          src={settings.founder_image_url}
-                          alt="Preview"
-                          className="h-14 w-14 rounded-full object-cover border border-gray-200 shadow-xs"
-                          onError={(e) => {
-                            (e.target as HTMLElement).style.display = 'none';
-                          }}
-                        />
-                        <span className="text-[11px] text-gray-400">Photo preview</span>
-                      </div>
-                    )}
                   </div>
                 </div>
               )}
@@ -1000,17 +999,17 @@ export default function AdminContent() {
                       <span>Delivery Methods &amp; Pricing</span>
                     </h2>
                     <p className="text-xs text-gray-500 mt-0.5">
-                      Set the checkout delivery fees for Motor Park / Bus Pickup, Jumia Delivery, Fez Delivery, and Standard Doorstep Delivery. The selected delivery method&apos;s price replaces the standard delivery fee in the order total and is verified server-side.
+                      Configure the delivery price for Motor Park / Bus Pickup and Standard Doorstep Delivery. Fez Delivery adds ₦0 on this website because shipping and payment are arranged directly between the courier and the customer.
                     </p>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div className="rounded-xl border border-gray-200 p-4 bg-gray-50/50 space-y-2">
                       <label className="block text-xs font-bold text-gray-900">
                         Motor Park / Bus Pickup Fee (₦)
                       </label>
                       <p className="text-[11px] text-gray-500">
-                        Interstate bus / motor park waybill pickup price.
+                        Interstate bus / motor park waybill pickup price added at checkout and verified server-side.
                       </p>
                       <div className="relative">
                         <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-semibold">
@@ -1030,54 +1029,13 @@ export default function AdminContent() {
                       </div>
                     </div>
 
-                    <div className="rounded-xl border border-gray-200 p-4 bg-gray-50/50 space-y-2">
-                      <label className="block text-xs font-bold text-gray-900">
-                        Jumia Delivery Fee (₦)
-                      </label>
-                      <p className="text-[11px] text-gray-500">
-                        Nationwide delivery via Jumia Logistics.
-                      </p>
-                      <div className="relative">
-                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-semibold">
-                          ₦
-                        </span>
-                        <input
-                          type="number"
-                          min="0"
-                          step="100"
-                          value={settings.delivery_fee_jumia ?? '3000'}
-                          onChange={(e) =>
-                            handleSettingChange('delivery_fee_jumia', e.target.value)
-                          }
-                          placeholder="3000"
-                          className="w-full rounded-lg border border-gray-200 bg-white pl-8 pr-3 py-2 text-sm font-semibold text-gray-900 focus:outline-none focus:border-pink-500"
-                        />
+                    <div className="rounded-xl border border-pink-100 p-4 bg-pink-50/40 space-y-2">
+                      <div className="text-xs font-bold text-pink-900">
+                        Fez Delivery (External Courier)
                       </div>
-                    </div>
-
-                    <div className="rounded-xl border border-gray-200 p-4 bg-gray-50/50 space-y-2">
-                      <label className="block text-xs font-bold text-gray-900">
-                        Fez Delivery Fee (₦)
-                      </label>
-                      <p className="text-[11px] text-gray-500">
-                        Fast nationwide doorstep delivery via Fez Delivery.
+                      <p className="text-[11px] text-pink-800 leading-relaxed">
+                        <strong>₦0 added on site.</strong> When a customer selects Fez Delivery at checkout, no delivery fee is added to their order total on this website. The courier contacts the customer directly to arrange shipping and payment based on their location.
                       </p>
-                      <div className="relative">
-                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-semibold">
-                          ₦
-                        </span>
-                        <input
-                          type="number"
-                          min="0"
-                          step="100"
-                          value={settings.delivery_fee_fez ?? '2500'}
-                          onChange={(e) =>
-                            handleSettingChange('delivery_fee_fez', e.target.value)
-                          }
-                          placeholder="2500"
-                          className="w-full rounded-lg border border-gray-200 bg-white pl-8 pr-3 py-2 text-sm font-semibold text-gray-900 focus:outline-none focus:border-pink-500"
-                        />
-                      </div>
                     </div>
                   </div>
 

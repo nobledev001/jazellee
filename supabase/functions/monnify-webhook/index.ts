@@ -9,15 +9,12 @@ const corsHeaders = {
 const DEFAULT_DELIVERY_FEE = 3500;
 const DEFAULT_FREE_DELIVERY_THRESHOLD = 35000;
 const DEFAULT_MOTOR_PARK_FEE = 2000;
-const DEFAULT_JUMIA_FEE = 3000;
-const DEFAULT_FEZ_FEE = 2500;
 
 function extractDeliveryMethodFromOrder(orderRow: Record<string, unknown>): string {
   const normalize = (val: unknown): string | null => {
     if (typeof val !== 'string') return null;
     const clean = val.trim().toLowerCase();
     if (clean === 'motor_park' || clean === 'motor-park' || clean === 'park') return 'motor_park';
-    if (clean === 'jumia') return 'jumia';
     if (clean === 'fez') return 'fez';
     if (clean === 'standard') return 'standard';
     return null;
@@ -277,7 +274,6 @@ Deno.serve(async (req: Request) => {
         'free_delivery_threshold',
         'standard_delivery_fee',
         'delivery_fee_motor_park',
-        'delivery_fee_jumia',
         'delivery_fee_fez',
       ]);
 
@@ -302,8 +298,6 @@ Deno.serve(async (req: Request) => {
       settingsMap.delivery_fee_motor_park,
       DEFAULT_MOTOR_PARK_FEE
     );
-    const jumiaFee = parseFeeSetting(settingsMap.delivery_fee_jumia, DEFAULT_JUMIA_FEE);
-    const fezFee = parseFeeSetting(settingsMap.delivery_fee_fez, DEFAULT_FEZ_FEE);
 
     const deliveryMethod = extractDeliveryMethodFromOrder(
       existingOrder as unknown as Record<string, unknown>
@@ -313,10 +307,9 @@ Deno.serve(async (req: Request) => {
     if (serverSubtotal > 0) {
       if (deliveryMethod === 'motor_park') {
         serverDeliveryFee = motorParkFee;
-      } else if (deliveryMethod === 'jumia') {
-        serverDeliveryFee = jumiaFee;
       } else if (deliveryMethod === 'fez') {
-        serverDeliveryFee = fezFee;
+        // Fez delivery fees are ₦0 on this website (arranged & paid directly with the courier)
+        serverDeliveryFee = 0;
       } else {
         serverDeliveryFee =
           serverSubtotal >= freeDeliveryThreshold ? 0 : standardDeliveryFee;
