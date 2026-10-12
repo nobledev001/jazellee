@@ -110,6 +110,127 @@ interface LoginAttemptRecord {
 }
 const adminLoginAttempts = new Map<string, LoginAttemptRecord>();
 
+// Shared secret for internal backend communication & protected webhooks/crons
+const INTERNAL_API_SECRET = (
+  process.env.INTERNAL_API_SECRET ||
+  process.env.VITE_INTERNAL_API_SECRET ||
+  'jazelle-internal-sec-7f9a2b8e3c1d4a5b6f70912'
+).trim();
+
+if (!process.env.INTERNAL_API_SECRET) {
+  process.env.INTERNAL_API_SECRET = INTERNAL_API_SECRET;
+}
+
+/**
+ * Validates request includes the shared internal secret header ("x-internal-api-key")
+ * matching INTERNAL_API_SECRET with timing-safe comparison.
+ */
+function verifyInternalApiKey(req: express.Request): boolean {
+  const incoming = (
+    req.get('x-internal-api-key') ||
+    req.get('x-internal-secret') ||
+    req.get('x-api-key') ||
+    ''
+  ).trim();
+
+  if (!incoming || incoming.length !== INTERNAL_API_SECRET.length) {
+    return false;
+  }
+  try {
+    return crypto.timingSafeEqual(Buffer.from(incoming), Buffer.from(INTERNAL_API_SECRET));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Validates request includes a valid admin Supabase session token in Authorization header
+ * and checks the user has administrative privileges (profiles.role == 'admin' or admin email).
+ */
+async function verifyAdminSessionToken(
+  req: express.Request
+): Promise<{ valid: boolean; user?: Record<string, unknown>; error?: string }> {
+  const authHeader = (
+    req.get('authorization') ||
+    req.get('x-supabase-auth') ||
+    req.get('x-admin-token') ||
+    ''
+  ).trim();
+
+  let token = authHeader;
+  if (token.toLowerCase().startsWith('bearer ')) {
+    token = token.slice(7).trim();
+  }
+
+  if (!token) {
+    return { valid: false, error: 'Missing admin Supabase session token in Authorization header' };
+  }
+
+  const { supabaseUrl, supabaseKey } = getSupabaseConfig();
+  if (!supabaseUrl || !supabaseKey) {
+    return { valid: false, error: 'Supabase configuration not available on server' };
+  }
+
+  try {
+    // 1. Verify token with Supabase Auth
+    const userResp = await fetch(`${supabaseUrl}/auth/v1/user`, {
+      headers: {
+        apikey: supabaseKey,
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    if (!userResp.ok) {
+      return { valid: false, error: 'Invalid or expired admin session token' };
+    }
+
+    const userData = (await userResp.json()) as { id?: string; email?: string } | null;
+    if (!userData || !userData.id) {
+      return { valid: false, error: 'Could not identify user from session token' };
+    }
+
+    const email = String(userData.email || '').trim().toLowerCase();
+    const allowedAdminEmails = ['admin@jazelle.com'];
+    if (allowedAdminEmails.includes(email)) {
+      return { valid: true, user: userData };
+    }
+
+    // 2. Verify admin role in public.profiles table
+    const profileResp = await fetch(
+      `${supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(userData.id)}&select=role`,
+      {
+        headers: {
+          apikey: supabaseKey,
+          Authorization: `Bearer ${supabaseKey}`,
+        },
+      }
+    );
+
+    if (profileResp.ok) {
+      const profiles = (await profileResp.json()) as Array<{ role?: string }>;
+      if (Array.isArray(profiles) && profiles[0]?.role === 'admin') {
+        return { valid: true, user: userData };
+      }
+    }
+
+    return { valid: false, error: 'User does not have admin permissions' };
+  } catch (err) {
+    console.warn('[Admin Auth Token Verification Error]', err);
+    return { valid: false, error: 'Failed to verify admin credentials' };
+  }
+}
+
+/**
+ * Extracts normalized client IP address for database-backed rate limiting.
+ */
+function getClientIp(req: express.Request): string {
+  const forwarded = req.get('x-forwarded-for');
+  if (forwarded) {
+    return forwarded.split(',')[0].trim();
+  }
+  return req.socket.remoteAddress || 'unknown';
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -128,7 +249,7 @@ async function startServer() {
     res.header('Access-Control-Allow-Origin', '*');
     res.header(
       'Access-Control-Allow-Headers',
-      'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Paystack-Signature, monnify-signature'
+      'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Paystack-Signature, monnify-signature, x-internal-api-key, x-internal-secret'
     );
     if (req.method === 'OPTIONS') {
       return res.sendStatus(200);
@@ -301,6 +422,7 @@ async function startServer() {
 
     // 3. Re-validate coupon server-side if attached
     let serverDiscountAmount = 0;
+    let verifiedCouponId: string | null = null;
     const rawCouponCode = orderRow.coupon_code ? String(orderRow.coupon_code).trim().toUpperCase() : '';
 
     if (rawCouponCode) {
@@ -333,6 +455,7 @@ async function startServer() {
             const underLimit = usageLimit === null || usageLimit <= 0 || usedCount < usageLimit;
             if (notExpired && underLimit) {
               couponValid = true;
+              verifiedCouponId = String(couponRow.id || '');
               discountType = String(couponRow.discount_type || 'percentage');
               discountValue = Number(couponRow.discount_value || 0);
             }
@@ -442,6 +565,8 @@ async function startServer() {
       serverDeliveryFee,
       serverExpectedTotalNaira,
       deliveryMethod,
+      verifiedCouponId,
+      rawCouponCode,
     };
   }
 
@@ -859,6 +984,31 @@ async function startServer() {
             }),
           });
         }
+        if (calcResult.verifiedCouponId) {
+          try {
+            const coupRes = await fetch(`${supabaseUrl}/rest/v1/rpc/claim_coupon_usage`, {
+              method: 'POST',
+              headers: {
+                apikey: supabaseKey,
+                Authorization: `Bearer ${supabaseKey}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ p_coupon_id: calcResult.verifiedCouponId }),
+            });
+            const claimSuccess = coupRes.ok ? await coupRes.json() : false;
+            if (claimSuccess !== true) {
+              console.warn(
+                `[Admin Alert: Coupon Limit Exhausted During Payment] Order #${cleanRef} was paid with coupon ID ${calcResult.verifiedCouponId} (${calcResult.rawCouponCode}), but claim_coupon_usage returned false. Another customer redeemed the final coupon slot first. Order completed for paid customer; logged for admin awareness.`
+              );
+            } else {
+              console.log(
+                `[Coupon Claimed] Atomically claimed coupon ID ${calcResult.verifiedCouponId} (${calcResult.rawCouponCode}) on order #${cleanRef}`
+              );
+            }
+          } catch (coupErr) {
+            console.warn('[Server Monnify Verify] claim_coupon_usage notice:', coupErr);
+          }
+        }
       } catch (finErr) {
         console.warn('[Server Monnify Verify] Order finalization RPC notice:', finErr);
       }
@@ -1021,6 +1171,32 @@ async function startServer() {
                 }),
               }
             );
+          }
+
+          if (calcResult.verifiedCouponId) {
+            try {
+              const coupRes = await fetch(`${supabaseUrl}/rest/v1/rpc/claim_coupon_usage`, {
+                method: 'POST',
+                headers: {
+                  apikey: supabaseKey,
+                  Authorization: `Bearer ${supabaseKey}`,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ p_coupon_id: calcResult.verifiedCouponId }),
+              });
+              const claimSuccess = coupRes.ok ? await coupRes.json() : false;
+              if (claimSuccess !== true) {
+                console.warn(
+                  `[Admin Notice: Coupon Limit Exhausted During Webhook] Webhook finalized order #${paymentReference}, but coupon ID ${calcResult.verifiedCouponId} (${calcResult.rawCouponCode}) could not claim a usage slot (claimed concurrently). Logged for admin review.`
+                );
+              } else {
+                console.log(
+                  `[Coupon Claimed] Webhook atomically claimed coupon ID ${calcResult.verifiedCouponId} (${calcResult.rawCouponCode}) on order #${paymentReference}`
+                );
+              }
+            } catch (coupErr) {
+              console.warn('[Monnify Webhook] claim_coupon_usage notice:', coupErr);
+            }
           }
         } catch (dbErr) {
           console.warn('[Monnify Webhook] Database claim notice:', dbErr);
@@ -1199,8 +1375,25 @@ async function startServer() {
     });
   });
 
-  // Transactional Email Dispatch API
+  // Transactional Email Dispatch API (protected with internal secret and database rate limiting)
   app.post(['/api/send-order-email', '/api/send-email'], async (req, res) => {
+    // 1. Shared internal secret authentication
+    if (!verifyInternalApiKey(req)) {
+      return res.status(401).json({
+        error: 'Unauthorized: Missing or invalid x-internal-api-key header',
+      });
+    }
+
+    // 2. Database-backed rate limiting (reusing check_and_increment_rate_limit)
+    const clientIp = getClientIp(req);
+    const rateCheck = await checkDatabaseRateLimit(`send_email:${clientIp}`, 20, 60);
+    if (!rateCheck.allowed) {
+      return res.status(429).json({
+        error: 'Rate limit exceeded: too many email dispatch requests. Please wait.',
+        retryAfter: rateCheck.resetInSec,
+      });
+    }
+
     try {
       const data = req.body || {};
       const resendKey = process.env.RESEND_API_KEY?.trim();
@@ -1393,8 +1586,34 @@ async function startServer() {
     `;
   }
 
-  // 1. Direct admin trigger endpoint for instant follow-up testing
+  // 1. Direct admin trigger endpoint for instant follow-up testing (protected by shared secret, admin auth, & rate limiting)
   app.post('/api/admin/send-abandoned-reminder', async (req, res) => {
+    // 1. Shared secret authentication
+    if (!verifyInternalApiKey(req)) {
+      return res.status(401).json({
+        error: 'Unauthorized: Missing or invalid x-internal-api-key header',
+      });
+    }
+
+    // 2. Admin Supabase session token verification
+    const adminCheck = await verifyAdminSessionToken(req);
+    if (!adminCheck.valid) {
+      const isMissing = adminCheck.error?.toLowerCase().includes('missing');
+      return res.status(isMissing ? 401 : 403).json({
+        error: adminCheck.error || 'Forbidden: Valid admin session token required',
+      });
+    }
+
+    // 3. Database-backed rate limiting (reusing check_and_increment_rate_limit)
+    const clientIp = getClientIp(req);
+    const rateCheck = await checkDatabaseRateLimit(`admin_abandoned_reminder:${clientIp}`, 10, 60);
+    if (!rateCheck.allowed) {
+      return res.status(429).json({
+        error: 'Rate limit exceeded: too many reminder dispatch requests. Please wait.',
+        retryAfter: rateCheck.resetInSec,
+      });
+    }
+
     try {
       const { order_number, customer_email, customer_name, items, total } = req.body || {};
 
@@ -1537,6 +1756,23 @@ async function startServer() {
   };
 
   app.all(['/api/cron/check-abandoned-orders', '/api/check-abandoned-orders'], async (req, res) => {
+    // 1. Shared secret authentication (required for cron/scheduled triggers)
+    if (!verifyInternalApiKey(req)) {
+      return res.status(401).json({
+        error: 'Unauthorized: Missing or invalid x-internal-api-key header for cron execution',
+      });
+    }
+
+    // 2. Database-backed rate limiting (reusing check_and_increment_rate_limit)
+    const clientIp = getClientIp(req);
+    const rateCheck = await checkDatabaseRateLimit(`cron_abandoned_orders:${clientIp}`, 10, 60);
+    if (!rateCheck.allowed) {
+      return res.status(429).json({
+        error: 'Rate limit exceeded: too many cron execution requests. Please wait.',
+        retryAfter: rateCheck.resetInSec,
+      });
+    }
+
     try {
       const forceAll = req.query.force === 'true';
       const host = req.get('origin') || req.get('host') || 'https://jazelleskinhaven.com';

@@ -2,84 +2,6 @@ import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import { fileURLToPath, URL } from 'node:url';
 
-function resendEmailPlugin(): Plugin {
-  return {
-    name: 'resend-email-api',
-    configureServer(server) {
-      server.middlewares.use('/api/send-email', async (req, res) => {
-        if (req.method !== 'POST') {
-          res.statusCode = 405;
-          res.end(JSON.stringify({ error: 'Method not allowed' }));
-          return;
-        }
-
-        let body = '';
-        req.on('data', (chunk) => {
-          body += chunk;
-        });
-
-        req.on('end', async () => {
-          try {
-            const data = JSON.parse(body || '{}');
-            const resendKey = process.env.RESEND_API_KEY;
-
-            if (resendKey && resendKey.trim().length > 0) {
-              try {
-                const resendResponse = await fetch('https://api.resend.com/emails', {
-                  method: 'POST',
-                  headers: {
-                    Authorization: `Bearer ${resendKey}`,
-                    'Content-Type': 'application/json',
-                  },
-                  body: JSON.stringify({
-                    from: data.from || 'Jazelle Skin Haven <orders@jazelleskinhaven.com>',
-                    to: data.to,
-                    subject: data.subject,
-                    html: data.html,
-                    text: data.text,
-                  }),
-                });
-
-                const resendData = await resendResponse.json();
-                if (!resendResponse.ok) {
-                  console.warn('[Resend API Warning]', resendData);
-                  // Return friendly payload so frontend does not break on unverified domain/keys
-                  res.setHeader('Content-Type', 'application/json');
-                  res.end(JSON.stringify({
-                    id: `sim_${Date.now()}`,
-                    simulated: true,
-                    resendNotice: resendData.message || 'Resend domain pending verification',
-                  }));
-                  return;
-                }
-
-                res.setHeader('Content-Type', 'application/json');
-                res.end(JSON.stringify({ id: resendData.id, success: true }));
-                return;
-              } catch (apiErr) {
-                console.warn('[Resend Dispatch Error]', apiErr);
-              }
-            }
-
-            // Fallback: simulated transactional email logged successfully
-            console.log(`[Email Dispatch Log] To: ${JSON.stringify(data.to)} | Subject: "${data.subject}"`);
-            res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify({
-              id: `sim_${Date.now()}`,
-              simulated: true,
-              message: 'Email logged (Resend API key not configured or simulated)',
-            }));
-          } catch {
-            res.statusCode = 400;
-            res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify({ error: 'Invalid JSON payload' }));
-          }
-        });
-      });
-    },
-  };
-}
-
 function paystackVerifyPlugin(): Plugin {
   return {
     name: 'paystack-verify-api',
@@ -206,7 +128,7 @@ function paystackVerifyPlugin(): Plugin {
 
 // https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [react(), resendEmailPlugin(), paystackVerifyPlugin()],
+  plugins: [react(), paystackVerifyPlugin()],
   server: {
     host: '0.0.0.0',
     port: 3000,

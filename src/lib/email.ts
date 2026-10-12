@@ -37,6 +37,10 @@ export interface SendEmailResult {
   error?: string;
 }
 
+export const INTERNAL_API_SECRET =
+  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_INTERNAL_API_SECRET) ||
+  'jazelle-internal-sec-7f9a2b8e3c1d4a5b6f70912';
+
 const DEFAULT_FROM = 'Jazelle Skin Haven <orders@jazelleskinhaven.com>';
 
 /**
@@ -51,9 +55,23 @@ export async function sendTransactionalEmail(payload: SendEmailPayload): Promise
   let result: SendEmailResult = { success: false };
 
   try {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'x-internal-api-key': INTERNAL_API_SECRET,
+    };
+
+    try {
+      const { data: authData } = await supabase.auth.getSession();
+      if (authData?.session?.access_token) {
+        headers['Authorization'] = `Bearer ${authData.session.access_token}`;
+      }
+    } catch {
+      // Session lookup fallback
+    }
+
     const response = await fetch('/api/send-email', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({
         from: fromAddress,
         to: toAddresses,
@@ -72,11 +90,16 @@ export async function sendTransactionalEmail(payload: SendEmailPayload): Promise
         simulated: Boolean(data.simulated),
       };
     } else {
-      result = { ok: true, success: true, simulated: true, messageId: `local_${Date.now()}` };
+      const errData = await response.json().catch(() => ({}));
+      result = {
+        ok: false,
+        success: false,
+        error: errData.error || `HTTP ${response.status}`,
+      };
     }
   } catch (err) {
-    console.warn('[Email] Backend email dispatch fallback:', err);
-    result = { ok: true, success: true, simulated: true, messageId: `fallback_${Date.now()}` };
+    console.warn('[Email] Backend email dispatch error:', err);
+    result = { ok: false, success: false, error: err instanceof Error ? err.message : 'Network error' };
   }
 
   // 2. Log email to Supabase for audit & admin traceability

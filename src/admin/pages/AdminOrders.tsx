@@ -16,7 +16,7 @@ import {
   Send,
 } from 'lucide-react';
 import { supabase, type DbOrder } from '../supabase';
-import { sendShippingUpdateEmail, sendOrderTrackingEmail } from '@/lib/email';
+import { sendShippingUpdateEmail, sendOrderTrackingEmail, INTERNAL_API_SECRET } from '@/lib/email';
 import {
   extractOrderDeliveryInfo,
   formatAdminDeliverySummary,
@@ -334,9 +334,16 @@ export default function AdminOrders() {
   const handleSendReminderEmail = async (order: DbOrder) => {
     setSendingReminderId(order.id);
     try {
+      const { data: authData } = await supabase.auth.getSession();
+      const token = authData?.session?.access_token || '';
+
       const resp = await fetch('/api/admin/send-abandoned-reminder', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-internal-api-key': INTERNAL_API_SECRET,
+          'Authorization': `Bearer ${token}`,
+        },
         body: JSON.stringify({
           order_number: order.order_number,
           customer_email: order.customer_email,
@@ -354,8 +361,9 @@ export default function AdminOrders() {
         setActionNotice(`Reminder email sent to ${order.customer_email} for order ${order.order_number}`);
         setTimeout(() => setActionNotice(null), 4000);
       } else {
-        setActionNotice(`Notice: Email sent in simulated mode`);
-        setTimeout(() => setActionNotice(null), 4000);
+        const errPayload = await resp.json().catch(() => ({}));
+        setActionNotice(errPayload.error || `Could not dispatch reminder (HTTP ${resp.status})`);
+        setTimeout(() => setActionNotice(null), 5000);
       }
     } catch (err) {
       console.warn('[AdminOrders] Send reminder notice:', err);

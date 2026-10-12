@@ -354,7 +354,6 @@ Deno.serve(async (req: Request) => {
     // Re-validate coupon_code server-side if attached
     let serverDiscountAmount = 0;
     let verifiedCouponId: string | null = null;
-    let verifiedCouponUsedCount = 0;
     const rawCouponCode = orderRow.coupon_code ? String(orderRow.coupon_code).trim().toUpperCase() : '';
 
     if (rawCouponCode) {
@@ -417,7 +416,6 @@ Deno.serve(async (req: Request) => {
       }
 
       verifiedCouponId = String(couponRow.id);
-      verifiedCouponUsedCount = usedCount;
 
       if (couponRow.discount_type === 'percentage') {
         serverDiscountAmount = Math.min(
@@ -672,12 +670,48 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      // Increment coupon used_count server-side
+      // Claim coupon usage atomically in Postgres (race condition safe)
       if (verifiedCouponId) {
-        await supabaseAdmin
-          .from('coupons')
-          .update({ used_count: verifiedCouponUsedCount + 1 })
-          .eq('id', verifiedCouponId);
+        try {
+          const { data: claimSuccess, error: claimErr } = await supabaseAdmin.rpc(
+            'claim_coupon_usage',
+            { p_coupon_id: verifiedCouponId }
+          );
+
+          if (claimErr || claimSuccess !== true) {
+            console.warn(
+              `[Admin Notice: Coupon Limit Exhausted During Payment] Order #${cleanRef} completed for customer who already paid, but coupon ID ${verifiedCouponId} (${rawCouponCode}) could not claim a usage slot (another customer claimed the final slot concurrently). Logged for admin awareness.`,
+              claimErr || 'Usage limit reached'
+            );
+
+            // Log edge case in audit table so it is not silently lost
+            try {
+              await supabaseAdmin.from('payment_verifications').upsert({
+                reference: `${resolvedTxRef}_coupon_limit_exceeded`,
+                order_number: cleanRef,
+                amount_kobo: Math.round(amountPaid * 100),
+                currency: txCurrency,
+                status: 'coupon_limit_exceeded_concurrent_checkout',
+                verified_via: 'verify-monnify',
+                paystack_response: {
+                  notice: 'Customer paid with valid coupon at checkout init, but usage limit was exhausted by a concurrent checkout before final verification.',
+                  coupon_id: verifiedCouponId,
+                  coupon_code: rawCouponCode,
+                  claimed: claimSuccess,
+                  rpc_error: claimErr?.message || null,
+                },
+              });
+            } catch {
+              // Ignore audit logging errors
+            }
+          } else {
+            console.log(
+              `[Coupon Claimed] Atomically claimed coupon usage slot for coupon ID ${verifiedCouponId} (${rawCouponCode}) on order #${cleanRef}`
+            );
+          }
+        } catch (rpcErr) {
+          console.warn('[verify-monnify] Error executing claim_coupon_usage:', rpcErr);
+        }
       }
 
       // Record audit entry in payment_verifications if table exists
